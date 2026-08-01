@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+tts_ready.txt
+bin/
+obj/
+unity_mod/src/bin/
+unity_mod/src/obj/
+.dv-state.json
+.omo/
+.codegraph/
+Jogo atual/
+*.wav
+taylor_lines.txt
+renpy-tts-mod-1.0.0.zip
