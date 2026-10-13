@@ -76,6 +76,45 @@ label other:
             self.assertIn("GENERATED_CHOICE_HINTS", rendered)
             self.assertIn("points += 1", rendered)
 
+    def test_extract_from_directory_and_merge_prior_hints(self):
+        from extract_menu_hints_generic import run_extraction
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Prior hints file
+            prior_file = os.path.join(tmpdir, "prior_hints.rpy")
+            with open(prior_file, "w", encoding="utf-8") as f:
+                f.write(
+                    "# Prior\n"
+                    "init -2 python:\n"
+                    "    GENERATED_CHOICE_HINTS = {\n"
+                    "        ('old_label', 'Old Choice'): 'old_effect = 1',\n"
+                    "        ('collision_label', 'Choice'): 'old_collision = 1',\n"
+                    "    }\n"
+                )
+
+            # Game dir with subfolders and .rpy files
+            game_dir = os.path.join(tmpdir, "game")
+            sub_dir = os.path.join(game_dir, "story")
+            os.makedirs(sub_dir)
+
+            with open(os.path.join(game_dir, "script1.rpy"), "wb") as f:
+                f.write(b'label new_label:\n    menu:\n        "New Choice":\n            $ new_effect += 1\n')
+
+            with open(os.path.join(sub_dir, "script2.rpy"), "wb") as f:
+                f.write(b'label collision_label:\n    menu:\n        "Choice":\n            $ new_collision = 2\n')
+
+            output_file = os.path.join(tmpdir, "merged_hints.rpy")
+            count = run_extraction(game_dir, output_file, prior_hints_path=prior_file)
+
+            self.assertEqual(3, count)
+            with open(output_file, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertIn("('old_label', 'Old Choice'): 'old_effect = 1'", content)
+            self.assertIn("('new_label', 'New Choice'): 'new_effect += 1'", content)
+            self.assertIn("('collision_label', 'Choice'): 'new_collision = 2'", content)
+            self.assertNotIn("old_collision = 1", content)
+
     def test_script_has_no_personal_hardcoded_windows_path(self):
         with open(SCRIPT_PATH, "r", encoding="utf-8") as f:
             source = f.read()

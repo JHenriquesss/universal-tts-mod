@@ -12,7 +12,7 @@ class TestRenpyStartupSafety(unittest.TestCase):
         with open(TTS_MOD_PATH, "r", encoding="utf-8") as f:
             source = f.read()
 
-        init_match = re.search(r"init\s+1000\s+python:\s*(.*)\Z", source, re.S)
+        init_match = re.search(r"init\s+(?:999|1000)\s+python:\s*(.*)\Z", source, re.S)
         self.assertIsNotNone(init_match, "expected tts_mod.rpy to keep its init block")
         init_body = init_match.group(1)
 
@@ -109,6 +109,147 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
         self.assertIn("original.__code__ = patched.__code__", source)
         self.assertIn("setattr(renpy.store, name, _tts_patch_phone_callback_function(original))", source)
 
+    def test_tts_speak_sends_stop_before_set_voice(self):
+        body = self._function_body("tts_speak")
+
+        self.assertIn('sendall(b"STOP\\n")', body)
+        self.assertIn('"SET_VOICE:"', body)
+        self.assertLess(body.index('sendall(b"STOP\\n")'), body.index('"SET_VOICE:"'))
+
+    def test_gender_aware_voice_resolution(self):
+        source = self._source()
+        self.assertIn("female_pool", source)
+        self.assertIn("male_pool", source)
+
+
+class TestRenpyAutoForwardLifecycle(unittest.TestCase):
+    def _source(self):
+        with open(TTS_MOD_PATH, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def _function_body(self, name):
+        source = self._source()
+        match = re.search(r"(?ms)^    def " + re.escape(name) + r"\([^)]*\):\n(.*?)(?=^    def |^    class |^init python:|\Z)", source)
+        self.assertIsNotNone(match, f"expected function {name} in tts_mod.rpy")
+        return match.group(1)
+
+    def test_no_problematic_afm_callback_blocking_auto_forward(self):
+        source = self._source()
+        self.assertNotIn(
+            "config.afm_callback = _tts_afm_callback",
+            source,
+            "config.afm_callback must not be overridden with a function returning False, as Ren'Py cancels auto mode",
+        )
+
+    def test_tts_toggle_auto_synchronizes_preferences_and_forces_interaction_restart(self):
+        body = self._function_body("tts_toggle_auto")
+        self.assertIn("_preferences.afm_enable", body)
+        self.assertIn("_preferences.afm_after_click", body)
+        self.assertIn("_preferences.afm_time", body)
+        self.assertIn("renpy.restart_interaction()", body)
+
+    def test_tts_toggle_auto_advances_immediately_if_not_playing(self):
+        body = self._function_body("tts_toggle_auto")
+        self.assertIn("auto_advance_flag", body)
+
+    def test_auto_advance_action_synchronizes_quick_menu_and_respects_choice_screen(self):
+        source = self._source()
+        self.assertIn("class TTSAutoAdvanceAction(Action):", source)
+        self.assertIn('renpy.get_screen("choice")', source)
+        self.assertIn("renpy.end_interaction(True)", source)
+        self.assertIn("afm_after_click", source)
+
+    def test_screen_auto_button_accessible_regardless_of_socket(self):
+        source = self._source()
+        screen_match = re.search(r"(?ms)screen tts_auto_forward_checker\(\):.*?\Z", source)
+        self.assertIsNotNone(screen_match)
+        screen_body = screen_match.group(0)
+        self.assertNotIn(
+            "if tts_state.sock:\n        vbox:\n            xalign 0.99",
+            screen_body,
+            "Auto forward UI should not be hidden completely when socket is reconnecting or not yet initialized",
+        )
+
+    def test_tts_state_setstate_does_not_clobber_active_connection(self):
+        source = self._source()
+        self.assertIn("def __setstate__(self", source)
+        setstate_match = re.search(r"(?ms)def __setstate__\(self, d\):.*?(?=def |\Z)", source)
+        self.assertIsNotNone(setstate_match)
+        setstate_body = setstate_match.group(0)
+        self.assertIn("self.is_playing = False", setstate_body)
+    def test_save_compat_hook_registered_and_safeguards_loads(self):
+        source = self._source()
+        self.assertIn("_tts_install_save_compat_hook()", source)
+        self.assertIn("def _tts_install_save_compat_hook():", source)
+        self.assertIn("config.load_failed_label = \"_after_load\"", source)
+        self.assertIn("script.has_label = compat_has_label", source)
+        self.assertIn("script.lookup = compat_lookup", source)
+
+    def test_auto_forward_watchdog_unfreezes_stuck_playback(self):
+        source = self._source()
+        self.assertIn("speak_start_time", source)
+        self.assertIn("expected_duration", source)
+        # Verify watchdog inside TTSAutoAdvanceAction
+        action_match = re.search(r"(?ms)class TTSAutoAdvanceAction\(Action\):.*?(?=screen |\Z)", source)
+        self.assertIsNotNone(action_match)
+        action_body = action_match.group(0)
+        self.assertIn("speak_start_time", action_body)
+        self.assertIn("auto_advance_flag = True", action_body)
+
+    def test_toggle_auto_advances_if_audio_expired_or_stuck(self):
+        body = self._function_body("tts_toggle_auto")
+        self.assertIn("speak_start_time", body)
+        self.assertIn("expected_duration", body)
+
+    def test_keymap_covers_both_uppercase_and_lowercase_a(self):
+        source = self._source()
+        self.assertIn("'a': tts_toggle_auto", source)
+        self.assertIn("'A': tts_toggle_auto", source)
+        self.assertIn("'shift_K_a': tts_toggle_auto", source)
+        self.assertIn("'K_a': tts_toggle_auto", source)
+        self.assertIn("toggle_afm", source)
+
+    def test_socket_disconnect_resets_is_playing(self):
+        body = self._function_body("_tts_socket_listener")
+        self.assertIn("tts_state.is_playing = False", body)
+
+    def test_kokoro_engine_implements_stop_and_queue_drain(self):
+        with open("renpy_mod/tts_engines.py", "r", encoding="utf-8") as f:
+            engine_source = f.read()
+        self.assertIn("def stop(self):", engine_source)
+        stop_match = re.search(r"(?ms)class KokoroEngine.*?def stop\(self\):(.*?)(?=def |\Z)", engine_source)
+        self.assertIsNotNone(stop_match, "KokoroEngine must implement stop()")
+        stop_body = stop_match.group(1)
+        self.assertIn("self.stop_flag = True", stop_body)
+        self.assertIn('"STOP"', stop_body)
+
+    def test_display_hook_installed_to_prevent_premature_renpy_say_advance(self):
+        source = self._source()
+        self.assertIn("def _tts_install_display_hook():", source)
+        self.assertIn("_tts_install_display_hook()", source)
+        self.assertIn("renpy.display.tts", source)
+        self.assertIn("is_active", source)
+
+    def test_auto_advance_action_respects_post_playback_pause(self):
+        source = self._source()
+        self.assertIn("playback_done_time", source)
+        action_match = re.search(r"(?ms)class TTSAutoAdvanceAction\(Action\):.*?(?=screen |\Z)", source)
+        self.assertIsNotNone(action_match)
+        action_body = action_match.group(0)
+        self.assertIn("playback_done_time", action_body)
+
+    def test_watchdog_uses_relaxed_timeout_to_never_cut_legitimate_speech(self):
+        source = self._source()
+        action_match = re.search(r"(?ms)class TTSAutoAdvanceAction\(Action\):.*?(?=screen |\Z)", source)
+        self.assertIsNotNone(action_match)
+        action_body = action_match.group(0)
+        # Deve usar no mínimo 30s ou 40s de tolerância para não cortar falas longas
+        self.assertTrue(
+            "30.0" in action_body or "40.0" in action_body,
+            "Watchdog must have at least 30s tolerance to prevent cut-off",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

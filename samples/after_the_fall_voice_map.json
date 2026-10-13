@@ -1,0 +1,137 @@
+{
+  "default": "am_onyx",
+  "narrator": "af_heart",
+  "Narrator": "af_heart",
+  "NARRATOR": "af_heart",
+  "None": "af_heart",
+  "you": "am_onyx",
+  "me": "am_onyx",
+  "player": "am_onyx",
+  "Player": "am_onyx",
+  "PLAYER": "am_onyx",
+  "mc": "am_onyx",
+  "MC": "am_onyx",
+  "p": "am_onyx",
+  "P": "am_onyx",
+  "Adam": "am_onyx",
+  "adam": "am_onyx",
+  "ADAM": "am_onyx",
+  "[player_name]": "am_onyx",
+  "player_name": "am_onyx",
+  "Guardian": "am_onyx",
+  "guardian": "am_onyx",
+  "Guardian ": "am_onyx",
+  "[MainLunaRelation]": "am_onyx",
+  "MainLunaRelation": "am_onyx",
+
+  "Anne": "af_heart",
+  "anne": "af_heart",
+  "ANNE": "af_heart",
+  "Mom": "af_heart",
+  "mom": "af_heart",
+  "Wife": "af_heart",
+  "wife": "af_heart",
+
+  "Luna": "af_sky",
+  "luna": "af_sky",
+  "LUNA": "af_sky",
+  "Ward": "af_sky",
+  "ward": "af_sky",
+  "[Luna_relation]": "af_sky",
+  "Luna_relation": "af_sky",
+  "LunaRelation": "af_sky",
+
+  "Emily": "af_kore",
+  "emily": "af_kore",
+  "EMILY": "af_kore",
+
+  "Alice": "af_bella",
+  "alice": "af_bella",
+  "ALICE": "af_bella",
+  "Friend": "af_bella",
+  "friend": "af_bella",
+  "[EmiAliceRelation]": "af_bella",
+  "EmiAliceRelation": "af_bella",
+
+  "Sara": "af_sarah",
+  "sara": "af_sarah",
+  "SARA": "af_sarah",
+
+  "Mei": "af_aoede",
+  "mei": "af_aoede",
+  "MEI": "af_aoede",
+
+  "Rim": "af_jessica",
+  "rim": "af_jessica",
+  "RIM": "af_jessica",
+
+  "Lucy": "af_river",
+  "lucy": "af_river",
+  "LUCY": "af_river",
+
+  "Elen": "af_nicole",
+  "elen": "af_nicole",
+  "ELEN": "af_nicole",
+
+  "Woman": "af_sarah",
+  "woman": "af_sarah",
+  "WOMAN": "af_sarah",
+
+  "Samuel": "am_adam",
+  "samuel": "am_adam",
+  "SAMUEL": "am_adam",
+
+  "Tom": "am_eric",
+  "tom": "am_eric",
+  "TOM": "am_eric",
+
+  "Cole": "am_michael",
+  "cole": "am_michael",
+  "COLE": "am_michael",
+
+  "Thomas": "am_fenrir",
+  "thomas": "am_fenrir",
+  "THOMAS": "am_fenrir",
+
+  "Alan": "am_puck",
+  "alan": "am_puck",
+  "ALAN": "am_puck",
+
+  "Sam": "am_adam",
+  "sam": "am_adam",
+  "SAM": "am_adam",
+
+  "Miller": "am_michael",
+  "miller": "am_michael",
+  "MILLER": "am_michael",
+
+  "Yuri": "am_eric",
+  "yuri": "am_eric",
+  "YURI": "am_eric",
+
+  "Williams": "am_fenrir",
+  "williams": "am_fenrir",
+  "WILLIAMS": "am_fenrir",
+
+  "Graves": "am_adam",
+  "graves": "am_adam",
+  "GRAVES": "am_adam",
+
+  "Jonathan": "am_puck",
+  "jonathan": "am_puck",
+  "JONATHAN": "am_puck",
+
+  "Mitcher": "am_michael",
+  "mitcher": "am_michael",
+  "MITCHER": "am_michael",
+
+  "bōsa": "am_fenrir",
+  "bosa": "am_fenrir",
+  "Bosa": "am_fenrir",
+  "bōsa ": "am_fenrir",
+  "BŌSA": "am_fenrir",
+
+  "Unknown": "af_heart",
+  "unknown": "af_heart",
+  "UNKNOWN": "af_heart"
+}

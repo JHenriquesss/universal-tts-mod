@@ -50,10 +50,55 @@ def render_generated_hints(hints):
     return "\n".join(lines) + "\n"
 
 
-def run_extraction(archive_path, output_path):
-    with open(archive_path, "rb") as archive_file:
-        hints = extract_choice_hints(archive_file.read())
+import textwrap
 
+
+def load_prior_hints(prior_path):
+    if not prior_path or not os.path.exists(prior_path):
+        return {}
+    with open(prior_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    lines = [
+        line for line in content.splitlines()
+        if not line.strip().startswith("init") and not line.strip().startswith("#")
+    ]
+    scope = {}
+    try:
+        exec(textwrap.dedent("\n".join(lines)), scope)
+        return scope.get("GENERATED_CHOICE_HINTS", {})
+    except Exception:
+        return {}
+
+
+def extract_from_directory(game_dir):
+    hints = {}
+    for root_dir, _subdirs, filenames in os.walk(game_dir):
+        for filename in sorted(filenames):
+            if filename.endswith(".rpy") and not filename.startswith("zzz_mod_choice_hints_generated"):
+                file_path = os.path.join(root_dir, filename)
+                try:
+                    with open(file_path, "rb") as f:
+                        file_hints = extract_choice_hints(f.read())
+                    hints.update(file_hints)
+                except Exception:
+                    continue
+    return hints
+
+
+def run_extraction(target_path, output_path, prior_hints_path=None):
+    if os.path.isdir(target_path):
+        hints = extract_from_directory(target_path)
+    else:
+        with open(target_path, "rb") as archive_file:
+            hints = extract_choice_hints(archive_file.read())
+
+    if prior_hints_path:
+        prior = load_prior_hints(prior_hints_path)
+        merged = dict(prior)
+        merged.update(hints)
+        hints = merged
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as output_file:
         output_file.write(render_generated_hints(hints))
 
@@ -61,10 +106,11 @@ def run_extraction(archive_path, output_path):
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Extract Ren'Py menu consequence hints from an archive-like file.")
+    parser = argparse.ArgumentParser(description="Extract Ren'Py menu consequence hints from an archive-like file or game folder.")
     parser.add_argument("--game-path", help="Game folder used to derive default archive/output paths.")
-    parser.add_argument("--archive", help="Input archive/script file path. Defaults to <game-path>/scripts.rpa.")
+    parser.add_argument("--archive", help="Input archive/script file or folder path. Defaults to <game-path>/scripts.rpa or <game-path>.")
     parser.add_argument("--output", help="Output .rpy path. Defaults to <game-path>/zzz_mod_choice_hints_generated.rpy.")
+    parser.add_argument("--prior-hints", help="Path to prior episode zzz_mod_choice_hints_generated.rpy to merge.")
     return parser
 
 
@@ -73,7 +119,12 @@ def resolve_paths(args):
     output_path = args.output
 
     if args.game_path:
-        archive_path = archive_path or os.path.join(args.game_path, DEFAULT_ARCHIVE_NAME)
+        default_archive = os.path.join(args.game_path, DEFAULT_ARCHIVE_NAME)
+        if not archive_path:
+            if os.path.exists(default_archive) or not os.path.exists(args.game_path):
+                archive_path = default_archive
+            else:
+                archive_path = args.game_path
         output_path = output_path or os.path.join(args.game_path, DEFAULT_OUTPUT_NAME)
 
     if not archive_path or not output_path:
@@ -88,7 +139,7 @@ def main(argv=None):
 
     try:
         archive_path, output_path = resolve_paths(args)
-        count = run_extraction(archive_path, output_path)
+        count = run_extraction(archive_path, output_path, prior_hints_path=args.prior_hints)
     except Exception as exc:
         parser.error(str(exc))
         return 2

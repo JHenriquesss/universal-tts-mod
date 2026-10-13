@@ -99,6 +99,7 @@ def run_smoke_check(server_script=DEFAULT_SERVER_SCRIPT, log_dir=None, timeout=1
             sock.sendall(b"SET_SPEED:1.1\n")
             sock.sendall(b"Smoke check line.\n")
             sock.sendall(b"QUIT\n")
+            time.sleep(0.2)
 
         remaining = max(0.1, deadline - time.time())
         try:

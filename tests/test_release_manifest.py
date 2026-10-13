@@ -7,6 +7,10 @@ import zipfile
 
 sys.dont_write_bytecode = True
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 
 class TestReleaseManifest(unittest.TestCase):
     def test_tts_only_manifest_lists_required_sources_and_destinations(self):

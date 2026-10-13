@@ -58,6 +58,35 @@ class TestChoiceHintsCore(unittest.TestCase):
 
         self.assertIsNone(lookup_choice_hint(hints, None, "Unknown"))
 
+    def test_encoding_header_declared(self):
+        core_file = os.path.join(ROOT_DIR, "renpy_mod", "choice_hints_core.py")
+        with open(core_file, "rb") as f:
+            first_line = f.readline()
+        self.assertTrue(
+            b"coding: utf-8" in first_line or b"coding=utf-8" in first_line,
+            "choice_hints_core.py must declare utf-8 encoding for Python 2.7 / Ren'Py 7 compatibility",
+        )
+
+    def test_bytes_and_unicode_handling(self):
+        from renpy_mod.choice_hints_core import (
+            build_choice_hints,
+            lookup_choice_hint,
+            normalize_caption_unicode,
+        )
+
+        # Bytes and unicode normalization
+        self.assertEqual(normalize_caption_unicode("It’s fine"), "It's fine")
+        self.assertEqual(normalize_caption_unicode(b"It\xe2\x80\x99s fine"), "It's fine")
+
+        # Lookup with byte keys and str queries
+        hints = build_choice_hints(
+            generated={(b"label_1", b"C\xc3\xa9lestin"): "celestin hint"},
+            curated={},
+        )
+        self.assertEqual(lookup_choice_hint(hints, "label_1", "Célestin"), "celestin hint")
+        self.assertEqual(lookup_choice_hint(hints, b"label_1", b"C\xc3\xa9lestin"), "celestin hint")
+
+
 
 class TestChoiceOverlayCompatibility(unittest.TestCase):
     def test_public_screen_names_remain_declared(self):

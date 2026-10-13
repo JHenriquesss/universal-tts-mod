@@ -84,6 +84,37 @@ class TestReadmeDeployDocs(unittest.TestCase):
         self.assertNotIn("zzz_mod_choice_hints_generated.rpy", workflow)
         self.assertNotRegex(workflow, re.compile(r"copy\s+all\s+files", re.I))
 
+    def test_falcom_workflow_documents_supervisor_and_runtime_logs(self):
+        for filename in (
+            "falcom_launcher.py",
+            "falcom_text_hook.log",
+            "tts_backend_console.log",
+        ):
+            self.assertIn(f"`{filename}`", self.readme)
+
+        self.assertIn("JOGAR_COM_TTS.bat", self.readme)
+
+    def test_falcom_workflow_documents_automatic_textractor_hook(self):
+        for item in (
+            "`falcom_textractor.py`",
+            "`tts_textractor`",
+            "`TextractorCLI.exe`",
+        ):
+            self.assertIn(item, self.readme)
+
+        self.assertIn("correct dialogue hook", self.lower)
+        self.assertIn("automatically", self.lower)
+        self.assertIn("does not use the windows clipboard", self.lower)
+
+    def test_falcom_workflow_documents_all_sky_ed6_games(self):
+        section = self.readme.split("## TTS-Only Install And Run", 1)[-1].split(
+            "## Choice Hint Extraction", 1
+        )[0]
+
+        for game in ("Trails in the Sky FC", "Trails in the Sky SC", "Trails in the Sky the 3rd"):
+            self.assertIn(game, section)
+        self.assertIn("JOGAR_COM_TTS.bat", section)
+
     def test_tts_only_workflow_does_not_reference_local_paths_or_artifacts(self):
         workflow = self.readme.split("## TTS-Only Install And Run", 1)[-1].split("## Choice Hint Extraction", 1)[0]
 
