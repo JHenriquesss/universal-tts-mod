@@ -12,16 +12,16 @@
       <HintPath>..\bepinex_pack\BepInEx\core\BepInEx.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>..\UnityEngine.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>..\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.UI.dll</HintPath>
+      <HintPath>..\UnityEngine.UI.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <HintPath>..\UnityEngine.InputLegacyModule.dll</HintPath>
     </Reference>
   </ItemGroup>
 </Project>

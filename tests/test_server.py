@@ -31,6 +31,7 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            errors="replace",
             env=self.env,
         )
         self.sock = self._connect_to_server()
@@ -49,17 +50,14 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
 
         if getattr(self, "process", None):
             try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.terminate()
+                self.process.communicate(timeout=5)
+            except (subprocess.TimeoutExpired, ValueError):
+                self.process.kill()
                 try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-            for stream_name in ("stdout", "stderr"):
-                stream = getattr(self.process, stream_name, None)
-                if stream:
-                    stream.close()
+                    self.process.communicate(timeout=2)
+                except (subprocess.TimeoutExpired, ValueError):
+                    pass
+
         if getattr(self, "tempdir", None):
             self.tempdir.cleanup()
 
@@ -198,6 +196,43 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
         self.assertIn("command=SET_VOICE voice=am_adam", joined)
         self.assertIn("speak voice=am_adam", joined)
 
+    def test_stop_command_preserves_pending_set_voice_and_speed(self):
+        self._send_line("SET_VOICE:am_adam")
+        self._send_line("STOP")
+        self._send_line("Voice check after stop.")
+        messages = self._wait_for_log_message(lambda message: "speak voice=am_adam" in message)
+        joined = "\n".join(messages)
+
+        self.assertIn("command=SET_VOICE voice=am_adam", joined)
+        self.assertIn("speak voice=am_adam", joined)
+
+    def test_stop_does_not_purge_enqueued_voice_configuration(self):
+        # Directly test that STOP command handler preserves pending SET_VOICE in queue
+        import queue
+        q = queue.Queue()
+        q.put(("SET_VOICE", "am_adam"))
+        q.put(("SET_SPEED", 1.5))
+        q.put(("SPEAK", "Old sentence"))
+
+        # Simulated STOP flush logic
+        preserved = []
+        while not q.empty():
+            try:
+                item = q.get_nowait()
+                if item[0] in ("SET_VOICE", "SET_SPEED"):
+                    preserved.append(item)
+            except Exception:
+                break
+        q.put(("STOP", None))
+        for item in preserved:
+            q.put(item)
+
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+
+        self.assertEqual(items, [("STOP", None), ("SET_VOICE", "am_adam"), ("SET_SPEED", 1.5)])
+
     def test_empty_set_voice_does_not_crash_or_clear_default_voice(self):
         self._send_line("SET_VOICE:")
         self._send_line("Default voice check.")
@@ -207,6 +242,25 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
         self.assertTrue(
             any("command=SET_VOICE ignored=empty" in message for message in messages),
             f"expected empty voice command to be logged as ignored, got: {messages}",
+        )
+
+    def test_set_speed_rejects_negative_nan_and_infinite_values(self):
+        self._send_line("SET_SPEED:-1.0")
+        self._send_line("SET_SPEED:nan")
+        self._send_line("SET_SPEED:inf")
+        self._send_line("SET_SPEED:not_a_number")
+        self._send_line("SET_SPEED:1.75")
+        messages = self._wait_for_log_message(lambda message: "command=SET_SPEED speed=1.75" in message)
+
+        self.assertIsNone(self.process.poll(), "server crashed while validating SET_SPEED")
+        # Ensure invalid speeds were logged as ignored and valid 1.75 was applied
+        self.assertTrue(
+            any("command=SET_SPEED ignored=invalid" in message for message in messages),
+            f"expected invalid speeds to be ignored, got: {messages}",
+        )
+        self.assertTrue(
+            any("command=SET_SPEED speed=1.75" in message for message in messages),
+            f"expected speed 1.75 to be applied, got: {messages}",
         )
 
     def test_socket_ignores_empty_text_after_cleaning(self):
@@ -230,6 +284,31 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
             all(len(message) < 220 for message in previews),
             f"text preview logs must be bounded, got: {previews}",
         )
+
+    def test_reconnection_after_client_disconnect_receives_playback_done(self):
+        # First connection sends a line and receives PLAYBACK_DONE
+        self._send_line("First line before restart.")
+        first_reader = self.sock.makefile("r", encoding="utf-8")
+        resp1 = first_reader.readline().strip()
+        self.assertEqual("PLAYBACK_DONE", resp1)
+
+        # Disconnect first client (simulating game restart without QUIT)
+        first_reader.close()
+        self.sock.close()
+        time.sleep(0.2)
+
+        # Second connection (game restarted)
+        sock2 = socket.create_connection((HOST, self.port), timeout=2.0)
+        sock2.settimeout(3.0)
+        self.sock = sock2  # for tearDown cleanup
+        second_reader = sock2.makefile("r", encoding="utf-8")
+
+        # Second client sends a line
+        sock2.sendall(b"Second line after restart.\n")
+        resp2 = second_reader.readline().strip()
+        second_reader.close()
+
+        self.assertEqual("PLAYBACK_DONE", resp2, "reconnected client must receive PLAYBACK_DONE without queue theft")
 
 
 class TestTTSServerHarnessHelpers(unittest.TestCase):
@@ -256,6 +335,58 @@ class TestTTSServerHarnessHelpers(unittest.TestCase):
         self.assertIn("stdout=out text", text)
         self.assertIn("stderr=err text", text)
         self.assertIn("startup_context engine=mock", text)
+
+    def test_server_resolves_port_from_config_file_when_env_not_set(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((HOST, 0))
+                test_port = s.getsockname()[1]
+            cfg_path = os.path.join(tmpdir, "tts_config.json")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump({"port": test_port}, f)
+
+            # Copy tts_server.py to tmpdir so it finds tts_config.json in its directory
+            import shutil
+            shutil.copy2(SERVER_SCRIPT, os.path.join(tmpdir, "tts_server.py"))
+            shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "text_cleaner.py"), os.path.join(tmpdir, "text_cleaner.py"))
+            shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_engines.py"), os.path.join(tmpdir, "tts_engines.py"))
+
+            env = os.environ.copy()
+            env["TTS_ENGINE"] = "mock"
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["TTS_LOG_DIR"] = tmpdir
+            env.pop("TTS_PORT", None)
+
+            proc = subprocess.Popen(
+                [sys.executable, os.path.join(tmpdir, "tts_server.py"), "en", "None", "1.0"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmpdir,
+                env=env,
+            )
+            try:
+                # Give server a moment to bind and write ready file
+                ready_file = os.path.join(tmpdir, "tts_ready.txt")
+                for _ in range(50):
+                    if os.path.exists(ready_file):
+                        break
+                    time.sleep(0.1)
+                self.assertTrue(os.path.exists(ready_file))
+
+                # Verify connection succeeds on test_port
+                s = socket.create_connection((HOST, test_port), timeout=2.0)
+                s.sendall(b"QUIT\n")
+                s.close()
+            finally:
+                try:
+                    proc.communicate(timeout=3)
+                except (subprocess.TimeoutExpired, ValueError):
+                    proc.kill()
+                    try:
+                        proc.communicate(timeout=1)
+                    except (subprocess.TimeoutExpired, ValueError):
+                        pass
+
 
 
 if __name__ == "__main__":

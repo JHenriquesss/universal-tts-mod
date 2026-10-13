@@ -1,3 +1,4 @@
+using BepInEx.Configuration;
 using System;
 using System.IO;
 using System.Net.Sockets;
@@ -29,6 +30,15 @@ namespace KokoroTts
         private bool autoForward = false;
         private bool shouldAutoAdvance = false;
 
+        private ConfigEntry<string> serverHost;
+        private ConfigEntry<int> serverPort;
+        private ConfigEntry<string> defaultVoice;
+        private ConfigEntry<float> debounceDelay;
+        private ConfigEntry<float> scanInterval;
+        private ConfigEntry<string> customIgnoreTerms;
+
+        private float nextScanTime = 0f;
+
         // Buffer e temporizador para efeito Maquina de Escrever (Typewriter)
         private string candidateText = "";
         private float debounceTimer = 0f;
@@ -41,8 +51,7 @@ namespace KokoroTts
         private HashSet<string> ignoreExact = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "Save", "Load", "Options", "Back", "Quit", "Auto", "Skip", "Log", "Prefs", "Menu",
-            "Yes", "No", "Cancel", "Ok", "Settings", "Relations", "Inventory", "Gallery", "Help",
-            "Crowd", "Kandhasarian Emissaries", "Baron Maffren"
+            "Yes", "No", "Cancel", "Ok", "Settings", "Relations", "Inventory", "Gallery", "Help"
         };
 
         private string[] ignoreContains = new string[]
@@ -50,9 +59,49 @@ namespace KokoroTts
             "Choice Taken", "Path Choice", "Quest Complete", "Level Up", "Achievement"
         };
 
+        private static Type _cachedTmpType = null;
+        private static bool _tmpTypeSearched = false;
+
+        private static Type GetTmpType()
+        {
+            if (!_tmpTypeSearched)
+            {
+                _tmpTypeSearched = true;
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    var t = assembly.GetType("TMPro.TMP_Text") ?? assembly.GetType("TMPro.TextMeshProUGUI");
+                    if (t != null)
+                    {
+                        _cachedTmpType = t;
+                        break;
+                    }
+                }
+            }
+            return _cachedTmpType;
+        }
+
         void Awake()
         {
-            Logger.LogInfo("Kokoro TTS Plugin v1.3.0 (Com P/Invoke Spacebar Auto-Advance) Carregado.");
+            serverHost = Config.Bind("Connection", "Host", "127.0.0.1", "Endereço IP do servidor Kokoro TTS");
+            serverPort = Config.Bind("Connection", "Port", 5050, "Porta TCP do servidor Kokoro TTS");
+            defaultVoice = Config.Bind("Voice", "DefaultVoice", "af_heart", "Voz padrão do Kokoro TTS");
+            debounceDelay = Config.Bind("Timing", "DebounceDelay", 0.35f, "Tempo de debounce (segundos) para máquina de escrever");
+            scanInterval = Config.Bind("Timing", "ScanInterval", 0.2f, "Intervalo em segundos entre varreduras de cena (evita picos de CPU/GC)");
+            customIgnoreTerms = Config.Bind("Dialogue", "IgnoredExactTerms", "", "Termos adicionais separados por vírgula para ignorar na leitura");
+
+            if (customIgnoreTerms != null && !string.IsNullOrEmpty(customIgnoreTerms.Value))
+            {
+                foreach (var term in customIgnoreTerms.Value.Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string trimmed = term.Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                    {
+                        ignoreExact.Add(trimmed);
+                    }
+                }
+            }
+
+            Logger.LogInfo("Kokoro TTS Plugin v1.4.0 (Otimizado via BepInEx) Carregado.");
         }
 
         void Update()
@@ -82,12 +131,30 @@ namespace KokoroTts
             if (!isConnected || socket == null || !socket.Connected)
                 return;
 
-            ScanSceneForDialogue();
+            if (Time.time >= nextScanTime)
+            {
+                float interval = scanInterval != null ? scanInterval.Value : 0.2f;
+                nextScanTime = Time.time + Mathf.Max(0.05f, interval);
+                ScanSceneForDialogue();
+            }
+
             ProcessDebounce();
         }
 
         private void SimulateSpacebar()
         {
+            // Proteção contra simulação fora de foco (ex: jogador deu Alt+Tab)
+            if (!Application.isFocused)
+            {
+                return;
+            }
+
+            // Proteção de plataforma para evitar crash em Linux/Mac/Steam Deck nativo
+            if (Application.platform != RuntimePlatform.WindowsPlayer && Application.platform != RuntimePlatform.WindowsEditor)
+            {
+                return;
+            }
+
             try
             {
                 keybd_event(VK_SPACE, 0, 0, UIntPtr.Zero);
@@ -123,19 +190,19 @@ namespace KokoroTts
                 catch { }
             }
 
-            // 2. Scan TextMeshPro / Outros componentes de Texto via Reflexao
+            // 2. Scan TextMeshPro focado pelo tipo (evita percorrer todos os 10k componentes da cena)
             try
             {
-                UnityEngine.Object[] objects = FindObjectsOfType(typeof(Component));
-                foreach (var obj in objects)
+                Type tmpType = GetTmpType();
+                if (tmpType != null)
                 {
-                    try
+                    UnityEngine.Object[] tmpObjects = FindObjectsOfType(tmpType);
+                    foreach (var obj in tmpObjects)
                     {
-                        Component comp = obj as Component;
-                        if (comp != null && comp.gameObject.activeInHierarchy)
+                        try
                         {
-                            string typeName = comp.GetType().Name;
-                            if (typeName.Contains("Text") || typeName.Contains("TMP"))
+                            Component comp = obj as Component;
+                            if (comp != null && comp.gameObject.activeInHierarchy)
                             {
                                 var prop = comp.GetType().GetProperty("text");
                                 if (prop != null)
@@ -150,8 +217,8 @@ namespace KokoroTts
                                 }
                             }
                         }
+                        catch { }
                     }
-                    catch { }
                 }
             }
             catch { }
@@ -194,7 +261,7 @@ namespace KokoroTts
             if (newText != candidateText)
             {
                 candidateText = newText;
-                debounceTimer = DEBOUNCE_DELAY;
+                debounceTimer = debounceDelay != null ? debounceDelay.Value : DEBOUNCE_DELAY;
             }
         }
 
@@ -232,12 +299,21 @@ namespace KokoroTts
             {
                 DisconnectSocket();
 
-                socket = new TcpClient("127.0.0.1", 5050);
+                string host = serverHost != null ? serverHost.Value : "127.0.0.1";
+                int port = serverPort != null ? serverPort.Value : 5050;
+
+                socket = new TcpClient(host, port);
                 NetworkStream stream = socket.GetStream();
                 writer = new StreamWriter(stream, new UTF8Encoding(false));
                 reader = new StreamReader(stream, new UTF8Encoding(false));
                 isConnected = true;
-                Logger.LogInfo("--> Conectado com sucesso ao servidor Kokoro TTS em 127.0.0.1:5050!");
+                Logger.LogInfo($"--> Conectado com sucesso ao servidor Kokoro TTS em {host}:{port}!");
+
+                if (defaultVoice != null && !string.IsNullOrEmpty(defaultVoice.Value))
+                {
+                    writer.WriteLine("SET_VOICE:" + defaultVoice.Value);
+                    writer.Flush();
+                }
 
                 listenerThread = new Thread(ListenServerEvents);
                 listenerThread.IsBackground = true;

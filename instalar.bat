@@ -1,16 +1,16 @@
 @echo off
 chcp 65001 >nul
-title Kokoro TTS - Instalação
+title Kokoro TTS - InstalaÃ§Ã£o
 
 echo ============================================================
-echo   Kokoro TTS Mod para Ren'Py — Instalador
+echo   Kokoro TTS Mod para Ren'Py â Instalador
 echo ============================================================
 echo.
 
 :: Verificar espeak-ng
 espeak-ng --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [!] espeak-ng não encontrado. Instalando via winget...
+    echo [!] espeak-ng nÃ£o encontrado. Instalando via winget...
     winget install --id eSpeak-NG.eSpeak-NG --silent --accept-package-agreements --accept-source-agreements
     if %errorlevel% neq 0 (
         echo [ERRO] Falha ao instalar espeak-ng.
@@ -20,13 +20,17 @@ if %errorlevel% neq 0 (
     )
     echo [OK] espeak-ng instalado.
 ) else (
-    echo [OK] espeak-ng já instalado.
+    echo [OK] espeak-ng jÃ¡ instalado.
 )
 
 :: Localizar Python 3.12
-set PY312=%LOCALAPPDATA%\Programs\Python\Python312\python.exe
+set "PY312=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 if not exist "%PY312%" (
-    echo [!] Python 3.12 não encontrado. Instalando via winget...
+    where python >nul 2>&1
+    if %errorlevel% equ 0 set "PY312=python"
+)
+if not exist "%PY312%" if not "%PY312%"=="python" (
+    echo [!] Python 3.12 nÃ£o encontrado. Instalando via winget...
     winget install --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
     if %errorlevel% neq 0 (
         echo [ERRO] Falha ao instalar Python 3.12.
@@ -38,33 +42,33 @@ if not exist "%PY312%" (
     echo [OK] Python 3.12 encontrado.
 )
 
-:: Criar ambiente virtual se não existir
+:: Criar ambiente virtual se nÃ£o existir
 if not exist ".venv\Scripts\activate.bat" (
     echo.
     echo [*] Criando ambiente virtual Python 3.12...
     "%PY312%" -m venv .venv
     echo [OK] Ambiente virtual criado.
 ) else (
-    echo [OK] Ambiente virtual já existe.
+    echo [OK] Ambiente virtual jÃ¡ existe.
 )
 
-:: Instalar dependências
+:: Instalar dependÃªncias
 echo.
-echo [*] Instalando dependências Python (pode demorar alguns minutos)...
+echo [*] Instalando dependÃªncias Python (pode demorar alguns minutos)...
 .venv\Scripts\pip.exe install --upgrade pip >nul 2>&1
 .venv\Scripts\pip.exe install kokoro sounddevice soundfile numpy
 if %errorlevel% neq 0 (
-    echo [ERRO] Falha na instalação das dependências.
+    echo [ERRO] Falha na instalaÃ§Ã£o das dependÃªncias.
     pause
     exit /b 1
 )
 
 echo.
 echo ============================================================
-echo   [OK] Instalação concluída com sucesso!
+echo   [OK] InstalaÃ§Ã£o concluÃ­da com sucesso!
 echo ============================================================
 echo.
-echo   Próximo passo:
+echo   PrÃ³ximo passo:
 echo   Copie  renpy_mod\tts_mod.rpy  para a pasta  game\  do jogo.
 echo.
 pause

@@ -60,14 +60,26 @@ class TestTextCleaner(unittest.TestCase):
         self.assertEqual(TextCleaner.clean("Brooklyn Comin' right up!"), "Brooklyn Coming right up!")
         self.assertEqual(TextCleaner.clean("It's comin'!"), "It's coming!")
         self.assertEqual(TextCleaner.clean("Doin' fine."), "Doing fine.")
-        # Leading apostrophes
-        self.assertEqual(TextCleaner.clean("'cause I said so"), "cause I said so")
+        # Leading apostrophes with slang expansion
+        self.assertEqual(TextCleaner.clean("'cause I said so"), "because I said so")
+        self.assertEqual(TextCleaner.clean("I did it 'cause I wanted."), "I did it because I wanted.")
+        self.assertEqual(TextCleaner.clean("Tell 'im 'bout it."), "Tell him about it.")
         self.assertEqual(TextCleaner.clean("It's 'til tomorrow"), "It's til tomorrow")
+        # Conjunctions n' and an'
+        self.assertEqual(TextCleaner.clean("Rock an' roll"), "Rock and roll")
+        self.assertEqual(TextCleaner.clean("Salt n' pepper"), "Salt and pepper")
         # Standard contractions should be preserved
         self.assertEqual(TextCleaner.clean("Don't do it"), "Don't do it")
         self.assertEqual(TextCleaner.clean("They're here"), "They're here")
         # Smart apostrophes should be handled and then fixed if slang
         self.assertEqual(TextCleaner.clean("Comin’"), "Coming")
+
+    def test_preserves_proper_names_with_da_and_del(self):
+        self.assertEqual(TextCleaner.clean("Leonardo Da Vinci and Pedro da Silva"), "Leonardo Da Vinci and Pedro da Silva")
+
+    def test_preserves_alphanumeric_room_references_while_stripping_falcom_tags(self):
+        self.assertEqual(TextCleaner.clean("Room #3A is open"), "Room #3A is open")
+        self.assertEqual(TextCleaner.clean("#0CJoshua, did you find anything?#0C"), "Joshua, did you find anything?")
 
     @staticmethod
     def clean_and_compare(text):
@@ -131,6 +143,23 @@ class TestTextCleaner(unittest.TestCase):
         self.assertIn("DEFAULT_PRONUNCIATION_OVERRIDES", dir(text_cleaner))
         self.assertNotIn(r"\bNadia\b", clean_source)
         self.assertNotIn(r"\bDezno\b", clean_source)
+
+    def test_rpgmaker_escape_codes(self):
+        self.assertEqual(TextCleaner.clean(r"\c[18]Need \N[1]!"), "Need Reid!")
+        self.assertEqual(TextCleaner.clean(r"You must be \N[1], right?"), "You must be Reid, right?")
+        self.assertEqual(TextCleaner.clean(r"Hello \N[11]!"), "Hello Liora!")
+        self.assertEqual(TextCleaner.clean(r"Typo \[N]1 and \N[]"), "Typo Reid and Reid")
+        self.assertEqual(TextCleaner.clean(r"Stats: \V[64]% and \I,"), "Stats: % and")
+        self.assertEqual(TextCleaner.clean(r"\c[0]Only \c[1]Fear."), "Only Fear.")
+
+    def test_rpgmaker_special_emojis_and_hearts(self):
+        self.assertEqual(TextCleaner.clean("Good boy ❤︎"), "Good boy")
+        self.assertEqual(TextCleaner.clean("Cumming 🖤"), "Cumming")
+        self.assertEqual(TextCleaner.clean("Ahhh ♡ Yes ♥"), "Ahhh Yes")
+        self.assertEqual(TextCleaner.clean("Song ♬🎵♪♫"), "Song")
+        self.assertEqual(TextCleaner.clean("Coffee ☕ break"), "Coffee break")
+        self.assertEqual(TextCleaner.clean("Non‑breaking hyphen"), "Non-breaking hyphen")
+
 
 if __name__ == "__main__":
     unittest.main()

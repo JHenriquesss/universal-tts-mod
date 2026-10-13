@@ -12,7 +12,7 @@ status_path = os.path.join(log_dir, "tts_ready.txt")
 
 if os.path.exists(status_path):
     try: os.remove(status_path)
-    except: pass
+    except Exception: pass
 
 def _log(msg):
     try:
@@ -20,7 +20,7 @@ def _log(msg):
         data = {"timestamp": time.time(), "msg": msg}
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(data) + "\n")
-    except: pass
+    except Exception: pass
 
 # Redirecionamos para o log, mas MANTEMOS o console visível para o usuário
 def setup_logger():
@@ -37,12 +37,12 @@ def setup_logger():
                     try:
                         self.original_stream.write(message)
                         self.original_stream.flush()
-                    except: pass
+                    except Exception: pass
                     
         def flush(self):
             if self.original_stream:
                 try: self.original_stream.flush()
-                except: pass
+                except Exception: pass
 
     # Salva os streams originais antes de redirecionar
     orig_stdout = sys.stdout
@@ -69,7 +69,6 @@ try:
     import time
     import queue
     import threading
-    import numpy as np
     import re
 
     if here not in sys.path:
@@ -152,8 +151,34 @@ def main():
     except Exception:
         speed = 1.25
     host = '127.0.0.1'
+    config_file = os.path.join(here, "tts_config.json")
+    configured_port = None
+    if os.path.isfile(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                if "port" in cfg:
+                    configured_port = int(cfg["port"])
+        except Exception:
+            pass
+
+    cli_port = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            try:
+                cli_port = int(sys.argv[i + 1])
+            except ValueError:
+                pass
+
     try:
-        port = int(os.environ.get("TTS_PORT", "5050"))
+        if cli_port is not None:
+            port = cli_port
+        elif "TTS_PORT" in os.environ:
+            port = int(os.environ["TTS_PORT"])
+        elif configured_port is not None:
+            port = configured_port
+        else:
+            port = 5050
     except Exception:
         port = 5050
     engine_name = os.environ.get("TTS_ENGINE", "kokoro").lower()
@@ -183,31 +208,28 @@ def main():
         _log(f"Servidor pronto.")
         print("Servidor inicializado com sucesso. Pressione Ctrl+C para encerrar.")
 
-        _response_queue = queue.Queue()
-        def on_playback_done():
-            _response_queue.put("PLAYBACK_DONE")
-        engine.on_playback_done = on_playback_done
+        active_conn = None
+        conn_lock = threading.Lock()
 
-        def _response_worker(connection):
-            while True:
-                msg = _response_queue.get()
-                if msg is None: break
-                try:
-                    connection.sendall((msg + "\n").encode('utf-8'))
-                except:
-                    break
+        def on_playback_done():
+            with conn_lock:
+                if active_conn:
+                    try:
+                        active_conn.sendall(b"PLAYBACK_DONE\n")
+                    except Exception:
+                        pass
+        engine.on_playback_done = on_playback_done
 
         while True:
             conn, addr = server_sock.accept()
             _log(f"Conectado por {addr}")
             print(f"[*] Jogo conectado: {addr}")
-            
+
+            with conn_lock:
+                active_conn = conn
+
             with conn:
                 f = conn.makefile('r', encoding='utf-8')
-                
-                # Start response worker for this connection
-                resp_thread = threading.Thread(target=_response_worker, args=(conn,), daemon=True)
-                resp_thread.start()
 
                 try:
                     while True:
@@ -219,20 +241,47 @@ def main():
 
                         if line == "STOP":
                             _log("command=STOP")
+                            preserved = []
                             while not _speech_queue.empty():
-                                try: _speech_queue.get_nowait()
-                                except: break
-                            _speech_queue.put(("STOP", None))
+                                try:
+                                    item = _speech_queue.get_nowait()
+                                    if item[0] in ("SET_VOICE", "SET_SPEED"):
+                                        preserved.append(item)
+                                except Exception:
+                                    break
+                            try:
+                                _speech_queue.put_nowait(("STOP", None))
+                            except Exception:
+                                pass
+                            for item in preserved:
+                                try:
+                                    _speech_queue.put_nowait(item)
+                                except Exception:
+                                    pass
                             continue
                         if line == "QUIT":
                             _log("command=QUIT")
-                            _response_queue.put(None) # stop response worker
                             return
                         if line.startswith("SET_SPEED:"):
-                            try: speed = float(line[10:].strip())
-                            except: pass
-                            _log(f"command=SET_SPEED speed={speed}")
-                            _speech_queue.put(("SET_SPEED", speed))
+                            raw_speed = line[10:].strip()
+                            valid_speed = None
+                            try:
+                                parsed = float(raw_speed)
+                                import math
+                                if not math.isnan(parsed) and not math.isinf(parsed) and 0.1 <= parsed <= 5.0:
+                                    valid_speed = parsed
+                            except Exception:
+                                pass
+
+                            if valid_speed is not None:
+                                speed = valid_speed
+                                _log(f"command=SET_SPEED speed={speed}")
+                                try:
+                                    _speech_queue.put(("SET_SPEED", speed), timeout=0.5)
+                                except Exception:
+                                    pass
+                            else:
+                                _log(f"command=SET_SPEED ignored=invalid raw={raw_speed}")
                             continue
                         if line.startswith("SET_VOICE:"):
                             requested_voice = line[10:].strip()
@@ -248,16 +297,27 @@ def main():
                         if cleaned_text:
                             print(f"\n[TEXTO RECEBIDO] {cleaned_text}")
                             _log(f"text_preview={_preview_text(cleaned_text)}")
-                            _speech_queue.put(("SPEAK", cleaned_text))
+                            try:
+                                _speech_queue.put(("SPEAK", cleaned_text), timeout=1.0)
+                            except queue.Full:
+                                _log("speech_queue=full dropped_oldest")
+                                try:
+                                    _speech_queue.get_nowait()
+                                except Exception:
+                                    pass
+                                _speech_queue.put(("SPEAK", cleaned_text))
                         else:
                             _log("text_ignored=empty_after_cleaning")
                             print("[!] Texto vazio após limpeza (ignorado)")
                             # Immediately send PLAYBACK_DONE if we ignore
-                            _response_queue.put("PLAYBACK_DONE")
+                            on_playback_done()
                 except Exception as ex:
                     _log(f"Connection error: {ex}")
-            
-            _response_queue.put(None) # stop response worker
+                finally:
+                    with conn_lock:
+                        if active_conn is conn:
+                            active_conn = None
+
             _log("Conexão encerrada pelo cliente.")
             print("[!] Jogo desconectado. Aguardando nova conexao...")
 
