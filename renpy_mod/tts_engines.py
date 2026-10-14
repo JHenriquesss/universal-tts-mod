@@ -89,6 +89,7 @@ class KokoroEngine(TTSEngine):
             # Carrega o Pipeline com o modelo Kokoro 82M padrão
             # O parâmetro lang_code="a" é para inglês americano
             self.pipeline = KPipeline(lang_code=lang)
+            self.lang = lang
             self.samplerate = 24000
 
             # Inicializa diretorio de cache de audio
@@ -96,6 +97,7 @@ class KokoroEngine(TTSEngine):
             self.cache_dir = os.path.join(cache_base, ".tts_cache")
             try:
                 os.makedirs(self.cache_dir, exist_ok=True)
+                self.clean_cache()
             except Exception:
                 pass
             
@@ -108,6 +110,52 @@ class KokoroEngine(TTSEngine):
             _log_engine(f"Erro ao carregar Kokoro: {e}")
             self.pipeline = None
 
+    def set_lang(self, lang):
+        self.lang = lang
+        _log_engine(f"KokoroEngine alterando lang_code para: {lang}")
+        try:
+            from kokoro import KPipeline
+            self.pipeline = KPipeline(lang_code=lang)
+            _log_engine(f"KokoroEngine KPipeline atualizado com sucesso: {lang}")
+            return True
+        except Exception as e:
+            _log_engine(f"Erro ao alterar idioma no KokoroEngine: {e}")
+            return False
+
+    def clean_cache(self, max_files=2000, max_size_mb=500):
+        try:
+            if not getattr(self, "cache_dir", None) or not os.path.isdir(self.cache_dir):
+                return 0
+            entries = []
+            total_size = 0
+            for name in os.listdir(self.cache_dir):
+                if name.endswith(".npy") or name.endswith(".wav"):
+                    p = os.path.join(self.cache_dir, name)
+                    try:
+                        st = os.stat(p)
+                        entries.append((st.st_mtime, st.st_size, p))
+                        total_size += st.st_size
+                    except OSError:
+                        pass
+            max_bytes = max_size_mb * 1024 * 1024
+            removed_count = 0
+            if len(entries) > max_files or total_size > max_bytes:
+                entries.sort(key=lambda x: x[0])
+                for mtime, size, p in entries:
+                    if len(entries) - removed_count <= max_files and total_size <= max_bytes:
+                        break
+                    try:
+                        os.remove(p)
+                        total_size -= size
+                        removed_count += 1
+                    except OSError:
+                        pass
+            return removed_count
+        except Exception as e:
+            _log_engine(f"Erro na limpeza de cache: {e}")
+            return 0
+
+
     def _playback_worker(self):
         import sounddevice as sd
         stream = None
@@ -119,7 +167,8 @@ class KokoroEngine(TTSEngine):
                         try:
                             stream.stop()
                             stream.close()
-                        except: pass
+                        except Exception:
+                            pass
                     break
                     
                 if isinstance(chunk, str) and chunk == "STOP":
@@ -127,7 +176,8 @@ class KokoroEngine(TTSEngine):
                         try:
                             stream.stop()
                             stream.close()
-                        except: pass
+                        except Exception:
+                            pass
                         stream = None
                     self.audio_queue.task_done()
                     continue
@@ -137,7 +187,9 @@ class KokoroEngine(TTSEngine):
                     if self.on_playback_done:
                         try:
                             self.on_playback_done()
-                        except: pass
+                        except Exception:
+                            pass
+
                     self.audio_queue.task_done()
                     continue
                     
@@ -327,3 +379,9 @@ class MockEngine(TTSEngine):
             except Exception:
                 pass
         return True
+
+    def set_lang(self, lang):
+        self.lang = lang
+        _log_engine(f"MockEngine lang set to {lang}")
+        return True
+

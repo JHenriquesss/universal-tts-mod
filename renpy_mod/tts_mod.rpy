@@ -127,10 +127,12 @@ init 999 python:
         if tts_state.sock:
             try:
                 tts_state.sock.sendall(b"QUIT\n")
-            except: pass
+            except Exception:
+                pass
             try:
                 tts_state.sock.close()
-            except: pass
+            except Exception:
+                pass
             tts_state.sock = None
             
         if tts_state.proc:
@@ -145,8 +147,10 @@ init 999 python:
         
         status_path = os.path.join(renpy.config.gamedir, "tts_ready.txt")
         if os.path.exists(status_path):
-            try: os.remove(status_path)
-            except: pass
+            try:
+                os.remove(status_path)
+            except Exception:
+                pass
 
     def tts_connect(quiet=False):
         import socket
@@ -158,7 +162,7 @@ init 999 python:
                 tts_state.sock.sendall(b"\n") 
                 if not quiet: tts_notify("TTS já está conectado.")
                 return True
-            except:
+            except Exception:
                 tts_state.listening = False
                 tts_state.sock = None
 
@@ -177,8 +181,9 @@ init 999 python:
             t.start()
             if not quiet: tts_notify("Conectado ao Backend Externo!")
             return True
-        except:
+        except Exception:
             pass # Falhou conexão externa, tenta abrir o processo local
+
 
         # 3. Abrir o processo se não estiver rodando
         tts_kill()
@@ -241,8 +246,9 @@ init 999 python:
                         except Exception:
                             pass
                         return
-                    except:
+                    except Exception:
                         time.sleep(2)
+
                 if not quiet: tts_notify("Erro: Não foi possível conectar ao servidor TTS.")
 
             t = threading.Thread(target=_retry_connect)
@@ -483,7 +489,9 @@ init 999 python:
             try:
                 msg = "SET_SPEED:{}\n".format(tts_state.speed)
                 tts_state.sock.sendall(msg.encode('utf-8'))
-            except: pass
+            except Exception:
+                pass
+
 
 
     def tts_increase_speed():

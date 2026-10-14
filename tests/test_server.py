@@ -206,6 +206,15 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
         self.assertIn("command=SET_VOICE voice=am_adam", joined)
         self.assertIn("speak voice=am_adam", joined)
 
+    def test_socket_set_lang_changes_language(self):
+        self._send_line("SET_LANG:pt-br")
+        self._send_line("Teste de idioma.")
+        messages = self._wait_for_log_message(lambda message: "command=SET_LANG lang=p" in message)
+        joined = "\n".join(messages)
+
+        self.assertIn("command=SET_LANG lang=p", joined)
+
+
     def test_stop_does_not_purge_enqueued_voice_configuration(self):
         # Directly test that STOP command handler preserves pending SET_VOICE in queue
         import queue

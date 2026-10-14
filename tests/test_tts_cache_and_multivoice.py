@@ -80,6 +80,38 @@ class TestTtsCacheAndMultiVoice(unittest.TestCase):
             finally:
                 KokoroEngine.__init__ = original_init
 
+    def test_kokoro_clean_cache(self):
+        import tempfile
+        import time
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            original_init = KokoroEngine.__init__
+            KokoroEngine.__init__ = lambda self: setattr(self, 'cache_dir', tmp_dir) or None
+            try:
+                engine = KokoroEngine()
+                # Create 5 cache files with staged timestamps
+                for i in range(5):
+                    fpath = os.path.join(tmp_dir, f"file_{i}.npy")
+                    with open(fpath, "wb") as f:
+                        f.write(b"0" * 1024)
+                    os.utime(fpath, (time.time() - (5 - i) * 10, time.time() - (5 - i) * 10))
+
+                # Create a non-cache file that should not be touched
+                keep_path = os.path.join(tmp_dir, "notes.txt")
+                with open(keep_path, "w") as f:
+                    f.write("important notes")
+
+                # Clean cache to max 3 files
+                removed = engine.clean_cache(max_files=3, max_size_mb=100)
+                self.assertEqual(removed, 2)
+                self.assertTrue(os.path.exists(keep_path))
+                self.assertTrue(os.path.exists(os.path.join(tmp_dir, "file_4.npy")))
+                self.assertTrue(os.path.exists(os.path.join(tmp_dir, "file_3.npy")))
+                self.assertTrue(os.path.exists(os.path.join(tmp_dir, "file_2.npy")))
+                self.assertFalse(os.path.exists(os.path.join(tmp_dir, "file_0.npy")))
+                self.assertFalse(os.path.exists(os.path.join(tmp_dir, "file_1.npy")))
+            finally:
+                KokoroEngine.__init__ = original_init
+
     def test_get_tts_engine_factory_function(self):
         import tts_engines
         self.assertTrue(callable(tts_engines.get_tts_engine))

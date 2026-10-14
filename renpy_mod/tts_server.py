@@ -92,6 +92,25 @@ def _normalize_lang(lang):
         "en-us": "a",
         "english": "a",
         "us": "a",
+        "en-gb": "b",
+        "uk": "b",
+        "british": "b",
+        "es": "e",
+        "spanish": "e",
+        "fr": "f",
+        "french": "f",
+        "hi": "h",
+        "hindi": "h",
+        "it": "i",
+        "italian": "i",
+        "ja": "j",
+        "jp": "j",
+        "japanese": "j",
+        "pt": "p",
+        "pt-br": "p",
+        "portuguese": "p",
+        "zh": "z",
+        "chinese": "z",
     }
     key = str(lang or "a").strip().lower()
     return aliases.get(key, key or "a")
@@ -122,6 +141,13 @@ def _worker(engine, initial_speed, initial_voice):
                 speed = data
             elif cmd == "SET_VOICE":
                 voice = data or voice
+            elif cmd == "SET_LANG":
+                if hasattr(engine, "set_lang"):
+                    try:
+                        engine.set_lang(data)
+                        _log(f"engine.set_lang lang={data}")
+                    except Exception as err:
+                        _log(f"engine.set_lang error={err}")
             elif cmd == "SPEAK":
                 # LIMPEZA REDUNDANTE PARA APÓSTROFOS (Prevenção Total)
                 # Mesmo que o TextCleaner falhe, limpamos aqui novamente
@@ -291,6 +317,16 @@ def main():
                                 _speech_queue.put(("SET_VOICE", voice))
                             else:
                                 _log("command=SET_VOICE ignored=empty")
+                            continue
+                        if line.startswith("SET_LANG:"):
+                            raw_lang = line[9:].strip()
+                            normalized = _normalize_lang(raw_lang)
+                            if normalized:
+                                lang = normalized
+                                _log(f"command=SET_LANG lang={lang}")
+                                _speech_queue.put(("SET_LANG", lang))
+                            else:
+                                _log("command=SET_LANG ignored=empty")
                             continue
 
                         cleaned_text = TextCleaner.clean(line)
