@@ -53,6 +53,19 @@ class TestWikiState(unittest.TestCase):
         self.assertIn("No active DV carry-over after Phase 21", open_threads)
         self.assertIn("optional choice overlay remains opt-in", open_threads)
 
+    def test_wiki_records_multi_engine_architecture_and_closed_legacy_overlay_thread(self):
+        with open(ARCHITECTURE_PATH, "r", encoding="utf-8") as f:
+            architecture = f.read()
+        with open(OPEN_THREADS_PATH, "r", encoding="utf-8") as f:
+            open_threads = f.read()
+
+        self.assertIn("falcom_mod/falcom_text_hook.py", architecture)
+        self.assertIn("falcom_mod/falcom_win32_runtime.py", architecture)
+        self.assertIn("unity_mod/unity_text_hook.py", architecture)
+        self.assertNotIn("still contains Ren'Py UI and legacy wrapper functions", open_threads)
+        self.assertIn("build_additive_button_caption", open_threads)
+
 
 if __name__ == "__main__":
     unittest.main()
+

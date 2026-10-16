@@ -146,6 +146,21 @@ def display_choice_caption(caption):
     return rest if rest else source
 
 
+def build_additive_button_caption(caption, item_kwargs=None, hints_enabled=False):
+    """
+    Constrói a legenda visível do botão de escolha de forma aditiva:
+    1. Remove prefixos de requisitos técnicos da legenda base via display_choice_caption.
+    2. Preserva e concatena kwargs['hint'] nativos do jogo quando hints_enabled=True,
+       sem descartar parênteses legítimos do hint nativo e sem falhar se item_kwargs for None.
+    """
+    base_label = display_choice_caption(caption)
+    if hints_enabled and isinstance(item_kwargs, dict):
+        native_hint = item_kwargs.get("hint")
+        if native_hint:
+            return "{} {}".format(base_label, native_hint)
+    return base_label
+
+
 def format_hint_for_display(raw_hint):
     if not raw_hint:
         return ""

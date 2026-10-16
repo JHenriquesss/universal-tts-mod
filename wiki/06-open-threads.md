@@ -1,8 +1,7 @@
 # Open Threads
 
 ## Known Follow-Ups
-- `zzz_mod_choice_consequences.rpy` still contains Ren'Py UI and legacy wrapper functions; core logic is extracted, but file can be further trimmed later.
-- Choice screen override remains global `screen choice(items)`; compatibility risk for games with custom choice screens remains by design for now.
+- Choice screen override remains global `screen choice(items)`; native `kwargs["hint"]` and `dialogueTextOutlines` are preserved additively via `build_additive_button_caption`.
 - TTS-only release work is complete; optional choice overlay remains opt-in.
 - No active DV carry-over after Phase 21.
 
@@ -20,6 +19,8 @@
 - Release process omission risk reduced by final README checklist.
 - Socket test flakiness reduced by ready-file polling, richer setup diagnostics, and repeated focused test evidence.
 - Release artifact existence/contents verified by generated `renpy-tts-mod-1.0.0.zip` matching manifest exactly.
+- Dead `_legacy_*` functions in `zzz_mod_choice_consequences.rpy` removed (reduced to <250 lines) and additive native hint preservation hardened via `build_additive_button_caption`.
+- Monolithic `falcom_text_hook.py` decomposed into `falcom_text_hook.py` (<500 lines) and `falcom_win32_runtime.py` (<500 lines), with `falcom_voice_map.py` and `falcom_win32_runtime.py` included in `install_tts_mod.py`.
 
 ## Cross-Refs
 - Phases: [[03-phases.md#phases]]

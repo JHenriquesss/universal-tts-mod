@@ -20,6 +20,7 @@ init python:
         HINT_GREEN as MOD_HINT_GREEN,
         HINT_NEUTRAL as MOD_HINT_NEUTRAL,
         HINT_RED as MOD_HINT_RED,
+        build_additive_button_caption,
         build_choice_hints,
         display_choice_caption,
         format_hint_for_display,
@@ -115,9 +116,13 @@ init python:
             return None
         return mod_consequences_lookup(caption)
 
-    def mod_choice_button_display_caption(caption):
-        """Legenda visível no botão: remove prefixos '(Charisma: ...)', '(REQUIRED)', etc.; lookup usa caption completo."""
-        return display_choice_caption(mod_normalize_menu_caption(caption))
+    def mod_choice_button_display_caption(caption, item_kwargs=None, hints_enabled=False):
+        """Legenda visível no botão: remove prefixos '(Charisma: ...)', '(REQUIRED)', etc.; preserva kwargs['hint'] nativos."""
+        return build_additive_button_caption(
+            mod_normalize_menu_caption(caption),
+            item_kwargs=item_kwargs,
+            hints_enabled=hints_enabled,
+        )
 
     def mod_hint_format_for_display(raw):
         """Remove requisitos; aplica tags Ren'Py {color} verde/vermelho/neutro por fragmento."""
@@ -151,11 +156,11 @@ screen mod_choice_row(i):
         spacing 14
         xalign 0.5
         python:
-            _caption = i.caption
-            if getattr(persistent, "hintsEnabled", False) and "hint" in i.kwargs:
-                _caption += " " + i.kwargs["hint"]
-
-            _mod_btn_label = mod_choice_button_display_caption(_caption)
+            _mod_btn_label = mod_choice_button_display_caption(
+                i.caption,
+                item_kwargs=getattr(i, "kwargs", None),
+                hints_enabled=bool(getattr(persistent, "hintsEnabled", False)),
+            )
 
             _outlines = None
             if getattr(persistent, "dialogueTextOutlines", False):

@@ -5,9 +5,11 @@
 - Backend side: `renpy_mod/tts_server.py`; TCP server on `127.0.0.1:${TTS_PORT:-5050}`; accepts `STOP`, `SET_SPEED:<value>`, `QUIT`, text lines.
 - Engine side: `renpy_mod/tts_engines.py`; supported runtime path is `KokoroEngine`; `MockEngine` test-only via `TTS_ENGINE=mock`.
 - Text cleanup: `renpy_mod/text_cleaner.py`; removes Ren'Py tags/control text, normalizes punctuation/slang/mojibake, applies default or caller-provided pronunciation overrides.
-- Choice overlay: `renpy_mod/zzz_mod_choice_consequences.rpy`; Ren'Py UI/screens; delegates core lookup/formatting to `renpy_mod/choice_hints_core.py`.
-- Choice hint extractor: `extract_menu_hints_generic.py`; CLI accepts `--game-path` or explicit `--archive`/`--output`, extracts hints from bytes, renders `GENERATED_CHOICE_HINTS` file.
-- Installer: `install_tts_mod.py`; detects nested Ren'Py game root, copies TTS-only files by default, optional choice overlay only via explicit flag.
+- Choice overlay: `renpy_mod/zzz_mod_choice_consequences.rpy`; Ren'Py UI/screens; delegates core lookup/formatting and additive caption construction to `renpy_mod/choice_hints_core.py`.
+- Choice hint extractor: `extract_menu_hints_generic.py`; CLI accepts `--game-path` or explicit `--archive`/`--output`, extracts hints from bytes via indentation-stack menu parser, renders `GENERATED_CHOICE_HINTS` file.
+- Falcom ED6 side: `falcom_mod/falcom_text_hook.py` + `falcom_mod/falcom_win32_runtime.py` + `falcom_mod/falcom_voice_map.py`; hooks TextractorCLI/memory/clipboard for Trails in the Sky and sends multi-voice commands to the TCP TTS server.
+- Unity side: `unity_mod/unity_text_hook.py` + `unity_mod/unity_voice_map.py`; monitors BepInEx/XUnity logs or clipboard and bridges Unity games to the TCP TTS server.
+- Installer: `install_tts_mod.py`; detects engine (`renpy`, `falcom`, `unity`), copies TTS-only files by default for Ren'Py, optional choice overlay only via explicit flag.
 - Smoke check: `smoke_check.py`; starts backend with `TTS_ENGINE=mock`, isolated port/log dir, sends socket command + `QUIT`, cleans up child process.
 - Release manifest/archive: `release_manifest.py`; read-only manifest check, package/version metadata, default versioned TTS-only zip builder using manifest destinations.
 
