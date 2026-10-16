@@ -41,6 +41,22 @@ class TestChoiceHintsCore(unittest.TestCase):
         self.assertEqual("Go outside", display_choice_caption("(Charisma: 5) Go outside"))
         self.assertEqual("(Stay)", display_choice_caption("(Stay)"))
 
+    def test_lookup_choice_hint_matches_with_or_without_stripped_prefixes(self):
+        from renpy_mod.choice_hints_core import build_choice_hints, lookup_choice_hint
+
+        hints = build_choice_hints(
+            generated={
+                ("hub", "(REQ) Did you send the drones?"): "req_hint",
+                ("scene", "(Charisma: Level 3) (Flirty & cocky) Nice outfit"): "flirt_hint",
+                ("dialogue", "Plain question"): "plain_hint",
+            },
+            curated={},
+        )
+        self.assertEqual("req_hint", lookup_choice_hint(hints, "hub", "Did you send the drones?"))
+        self.assertEqual("req_hint", lookup_choice_hint(hints, "hub", "(REQ) Did you send the drones?"))
+        self.assertEqual("flirt_hint", lookup_choice_hint(hints, "scene", "Nice outfit"))
+        self.assertEqual("plain_hint", lookup_choice_hint(hints, "dialogue", "(Polite) Plain question"))
+
     def test_hint_format_colors_positive_negative_and_neutral_chunks(self):
         from renpy_mod.choice_hints_core import format_hint_for_display
 

@@ -30,7 +30,10 @@ def normalize_caption_unicode(value):
     result = _to_unicode(value)
     for char in ("\u2019", "\u2018", "\u2032", "\u00b4", "\u02bc"):
         result = result.replace(char, "'")
-    return result.replace("\u201c", '"').replace("\u201d", '"')
+    result = result.replace("\u201c", '"').replace("\u201d", '"')
+    result = result.replace("\u2026", "...")
+    result = result.replace("\u2013", "-").replace("\u2014", "-")
+    return result.replace("\u00a0", " ")
 
 
 def build_choice_hints(generated=None, curated=None):
@@ -60,10 +63,16 @@ def _register_unicode_aliases(hints):
             normalized = normalize_caption_unicode(caption)
             if normalized != caption:
                 extra.setdefault((label, normalized), value)
+            stripped = display_choice_caption(normalized)
+            if stripped != normalized:
+                extra.setdefault((label, stripped), value)
         elif isinstance(key, string_types):
             normalized = normalize_caption_unicode(key)
             if normalized != key:
                 extra.setdefault(normalized, value)
+            stripped = display_choice_caption(normalized)
+            if stripped != normalized:
+                extra.setdefault(stripped, value)
     for key, value in extra.items():
         hints.setdefault(key, value)
 
@@ -87,11 +96,16 @@ def lookup_choice_hint(hints, current_label, caption):
     if not cap:
         return None
 
-    # tenta direto e também com versão limpa (remove {color}, [gr], \n etc. para compat MLT)
     candidates = [cap]
+    stripped = display_choice_caption(cap)
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
     clean = clean_caption_for_match(cap)
-    if clean and clean != cap:
+    if clean and clean not in candidates:
         candidates.append(clean)
+    clean_stripped = display_choice_caption(clean)
+    if clean_stripped and clean_stripped not in candidates:
+        candidates.append(clean_stripped)
 
     for cand in candidates:
         if current_label is not None:
@@ -102,20 +116,17 @@ def lookup_choice_hint(hints, current_label, caption):
         if caption_hint is not None:
             return caption_hint
 
-    # fallback varrendo com comparação limpa
     for key, value in hints.items():
         if not (isinstance(key, tuple) and len(key) == 2):
             continue
         label, key_caption = key
-        # compara tanto raw quanto clean
-        if normalize_caption_unicode(key_caption) in candidates or clean_caption_for_match(key_caption) in candidates:
-            if current_label is not None and label != current_label:
-                continue
+        if current_label is not None and label != current_label:
+            continue
+        key_norm = normalize_caption_unicode(key_caption)
+        if key_norm in candidates or clean_caption_for_match(key_norm) in candidates:
             return value
-        # também compara clean do key contra clean do input
-        if clean and clean_caption_for_match(key_caption) == clean:
-            if current_label is not None and label != current_label:
-                continue
+        key_stripped = display_choice_caption(key_norm)
+        if key_stripped in candidates or (stripped and key_stripped == stripped):
             return value
 
     return None

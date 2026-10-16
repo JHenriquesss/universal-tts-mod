@@ -7,32 +7,177 @@ DEFAULT_ARCHIVE_NAME = "scripts.rpa"
 DEFAULT_OUTPUT_NAME = "zzz_mod_choice_hints_generated.rpy"
 
 
+LABEL_RE = re.compile(r"^\s*label\s+([a-zA-Z0-9_]+)\s*:")
+MENU_RE = re.compile(r"^(\s*)menu(?:\s+[a-zA-Z0-9_]+)?\s*:")
+CHOICE_SINGLE_RE = re.compile(
+    r"^(\s*)(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)')(?:\s*\([^)]*\))?(?:\s*if\s+.*)?\s*:$"
+)
+CHOICE_MULTI_RE = re.compile(
+    r"^(\s*)(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)')(?:\s*\([^)]*\))?\s*if\s*\("
+)
+
+EFFECT_PATTERNS = [
+    re.compile(r"\$?\s*([a-zA-Z0-9_]+\s*(?:\+=|-=|=)\s*[a-zA-Z0-9_\"'\.]+)"),
+    re.compile(r"([a-zA-Z0-9_]+\.(?:append|remove|add)\([^\)]*\))"),
+    re.compile(r"(route_[a-zA-Z0-9_]+\s*=\s*(?:True|False))"),
+]
+
+
 def extract_choice_hints(data):
-    labels = _find_labels(data)
+    if isinstance(data, bytes):
+        text = data.decode("utf-8", "ignore")
+    else:
+        text = data
+
+    lines = [line.rstrip("\r\n") for line in text.splitlines()]
     hints = {}
+    current_label = "unknown"
+    stack = []
+    i = 0
+    n = len(lines)
 
-    for menu_match in re.finditer(rb"(?m)^\s*menu\s*(\w+)?\s*:", data):
-        current_label = _label_before(labels, menu_match.start())
-        menu_end = _next_label_or_eof(data, menu_match.end())
-        menu_block = data[menu_match.start():menu_end]
-        choice_matches = list(re.finditer(rb'"([^"]+)"\s*:', menu_block))
+    while i < n:
+        raw_line = lines[i]
+        sline = raw_line.strip()
 
-        for index, choice_match in enumerate(choice_matches):
-            caption_bytes = choice_match.group(1)
-            caption = caption_bytes.decode("utf-8", "ignore")
-            if not _valid_caption(caption, caption_bytes):
+        if not sline or sline.startswith("#"):
+            if stack and stack[-1][0] == "choice":
+                stack[-1][4].append(sline)
+            i += 1
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+
+        lbl_m = LABEL_RE.match(raw_line)
+        if lbl_m:
+            current_label = lbl_m.group(1)
+            _unwind_stack(stack, hints)
+            i += 1
+            continue
+
+        menu_m = MENU_RE.match(raw_line)
+        if menu_m:
+            m_indent = len(menu_m.group(1))
+            _unwind_stack_to_indent(stack, m_indent, hints)
+            stack.append(("menu", m_indent, current_label))
+            i += 1
+            continue
+
+        if _has_enclosing_menu(stack, indent):
+            choice_info = _match_choice_header(lines, i)
+            if choice_info:
+                c_indent, caption, end_hdr_idx = choice_info
+                _unwind_choices_to_indent(stack, c_indent, hints)
+                caption = caption.replace('\\"', '"').replace("\\'", "'")
+                stack.append(("choice", c_indent, current_label, caption, []))
+                i = end_hdr_idx + 1
                 continue
 
-            branch_start = choice_match.start()
-            branch_end = choice_matches[index + 1].start() if index + 1 < len(choice_matches) else len(menu_block)
-            branch_data = menu_block[branch_start:branch_end]
-            effects = _extract_effects(branch_data)
+        _unwind_stack_to_indent(stack, indent, hints)
+        if stack and stack[-1][0] == "choice":
+            stack[-1][4].append(sline)
+        i += 1
 
-            if effects:
-                key = (current_label, caption)
-                _merge_hint(hints, key, effects)
-
+    _unwind_stack(stack, hints)
     return hints
+
+
+def _has_enclosing_menu(stack, indent):
+    for item in reversed(stack):
+        if item[0] == "menu":
+            return indent > item[1]
+    return False
+
+
+def _match_choice_header(lines, idx):
+    line = lines[idx]
+    s = line.rstrip()
+    m = CHOICE_SINGLE_RE.match(s)
+    if m:
+        indent = len(m.group(1))
+        caption = m.group(2) if m.group(2) is not None else m.group(3)
+        return indent, caption, idx
+
+    m = CHOICE_MULTI_RE.match(s)
+    if m:
+        indent = len(m.group(1))
+        caption = m.group(2) if m.group(2) is not None else m.group(3)
+        cur = idx
+        while cur < len(lines) and not lines[cur].rstrip().endswith(":"):
+            cur += 1
+        return indent, caption, cur
+
+    return None
+
+
+def _unwind_stack(stack, hints):
+    while stack:
+        top = stack.pop()
+        if top[0] == "choice":
+            _record_choice_effects(top, hints)
+
+
+def _unwind_stack_to_indent(stack, indent, hints):
+    while stack and stack[-1][1] >= indent:
+        top = stack.pop()
+        if top[0] == "choice":
+            _record_choice_effects(top, hints)
+
+
+def _unwind_choices_to_indent(stack, indent, hints):
+    while stack and stack[-1][0] == "choice" and stack[-1][1] >= indent:
+        top = stack.pop()
+        _record_choice_effects(top, hints)
+
+
+def _record_choice_effects(choice_item, hints):
+    _, _, label, caption, branch_lines = choice_item
+    effects = _extract_effects_from_lines(branch_lines)
+    if effects:
+        _merge_hint(hints, (label, caption), effects)
+
+
+def _extract_effects_from_lines(branch_lines):
+    effects = []
+    text_block = "\n".join(branch_lines)
+
+    for pattern in EFFECT_PATTERNS:
+        for match in pattern.finditer(text_block):
+            effect = match.group(1).replace("$", "").strip()
+            if _is_control_expression(effect):
+                continue
+            if effect not in effects:
+                effects.append(effect)
+
+    if not effects:
+        jump_match = re.search(r"jump\s+([a-zA-Z0-9_]+)", text_block)
+        if jump_match:
+            effects.append("Jump -> " + jump_match.group(1))
+
+    return effects
+
+
+def _is_control_expression(effect):
+    return (
+        effect.startswith("if ")
+        or effect.startswith("elif ")
+        or "==" in effect
+        or ">=" in effect
+        or "<=" in effect
+        or "!=" in effect
+    )
+
+
+def _merge_hint(hints, key, effects):
+    if key not in hints:
+        hints[key] = "; ".join(effects)
+        return
+
+    existing = hints[key].split("; ")
+    for effect in effects:
+        if effect not in existing:
+            existing.append(effect)
+    hints[key] = "; ".join(existing)
 
 
 def render_generated_hints(hints):
@@ -146,68 +291,6 @@ def main(argv=None):
 
     print("Extracted {} choice hints to {}".format(count, output_path))
     return 0
-
-
-def _find_labels(data):
-    labels = []
-    for match in re.finditer(rb"(?m)^\s*label\s+([a-zA-Z0-9_]+):", data):
-        labels.append((match.start(), match.group(1).decode("utf-8", "ignore")))
-    return labels
-
-
-def _label_before(labels, position):
-    current_label = "unknown"
-    for label_position, label_name in labels:
-        if label_position < position:
-            current_label = label_name
-        else:
-            break
-    return current_label
-
-
-def _next_label_or_eof(data, position):
-    next_label = re.search(rb"(?m)^\s*label\s+[a-zA-Z0-9_]+:", data[position:])
-    return position + next_label.start() if next_label else len(data)
-
-
-def _valid_caption(caption, caption_bytes):
-    if len(caption) > 150 or len(caption) < 1:
-        return False
-    return not (b"{" in caption_bytes and b"}" not in caption_bytes)
-
-
-def _extract_effects(branch_data):
-    effects = []
-    patterns = [
-        rb"\$?\s*([a-zA-Z0-9_]+\s*(?:\+=|-=|=)\s*[a-zA-Z0-9_\"'\.]+)",
-        rb"([a-zA-Z0-9_]+\.(?:append|remove|add)\([^\)]*\))",
-        rb"(route_[a-zA-Z0-9_]+\s*=\s*(?:True|False))",
-    ]
-
-    for pattern in patterns:
-        for match in re.finditer(pattern, branch_data):
-            effect = match.group(1).decode("utf-8", "ignore").replace("$", "").strip()
-            if effect not in effects:
-                effects.append(effect)
-
-    if not effects:
-        jump_match = re.search(rb"jump\s+([a-zA-Z0-9_]+)", branch_data)
-        if jump_match:
-            effects.append("Jump -> " + jump_match.group(1).decode("utf-8", "ignore"))
-
-    return effects
-
-
-def _merge_hint(hints, key, effects):
-    if key not in hints:
-        hints[key] = "; ".join(effects)
-        return
-
-    existing = hints[key].split("; ")
-    for effect in effects:
-        if effect not in existing:
-            existing.append(effect)
-    hints[key] = "; ".join(existing)
 
 
 def _escape(value):

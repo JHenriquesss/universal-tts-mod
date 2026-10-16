@@ -32,6 +32,67 @@ label other:
         self.assertEqual("Jump -> bad_end", hints[("start", "Leave")])
         self.assertEqual("love -= 1", hints[("other", "Help her")])
 
+    def test_extract_hints_with_inline_if_and_single_quotes(self):
+        from extract_menu_hints_generic import extract_choice_hints
+
+        data = b'''
+label hub:
+    menu:
+        "(REQ) Did you send the drones?" if Q1 == 0:
+            $ Q1 = 1
+            jump hub
+        'Single quoted option' if flag == 1 :
+            $ flag_count += 1
+        "Choice with args" (arg1, arg2) if score > 5:
+            $ bonus += 10
+'''
+        hints = extract_choice_hints(data)
+        self.assertIn(("hub", "(REQ) Did you send the drones?"), hints)
+        self.assertEqual("Q1 = 1", hints[("hub", "(REQ) Did you send the drones?")])
+        self.assertIn(("hub", "Single quoted option"), hints)
+        self.assertEqual("flag_count += 1", hints[("hub", "Single quoted option")])
+        self.assertIn(("hub", "Choice with args"), hints)
+        self.assertEqual("bonus += 10", hints[("hub", "Choice with args")])
+
+    def test_menu_block_does_not_leak_subsequent_code_into_last_choice(self):
+        from extract_menu_hints_generic import extract_choice_hints
+
+        data = b'''
+label scene1:
+    menu:
+        "Choice 1":
+            $ stat1 += 1
+        "Choice 2":
+            $ stat2 += 2
+    $ leaked_variable = 999
+    jump next_scene
+
+label scene2:
+    $ other = 1
+'''
+        hints = extract_choice_hints(data)
+        self.assertEqual("stat2 += 2", hints[("scene1", "Choice 2")])
+        self.assertNotIn("leaked_variable", hints[("scene1", "Choice 2")])
+        self.assertNotIn("next_scene", hints[("scene1", "Choice 2")])
+
+    def test_extract_nested_if_effects(self):
+        from extract_menu_hints_generic import extract_choice_hints
+
+        data = b'''
+label convo:
+    menu:
+        "Flirt with her":
+            if CharismaSkill >= 3:
+                $ MC_EXP += 50
+                $ Victoria_Lust += 2
+            else:
+                jump fail_label
+'''
+        hints = extract_choice_hints(data)
+        self.assertIn(("convo", "Flirt with her"), hints)
+        self.assertIn("Victoria_Lust += 2", hints[("convo", "Flirt with her")])
+        self.assertIn("MC_EXP += 50", hints[("convo", "Flirt with her")])
+
     def test_render_generated_hints_output_shape(self):
         from extract_menu_hints_generic import render_generated_hints
 
