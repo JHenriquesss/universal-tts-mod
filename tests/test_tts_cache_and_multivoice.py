@@ -116,6 +116,33 @@ class TestTtsCacheAndMultiVoice(unittest.TestCase):
         import tts_engines
         self.assertTrue(callable(tts_engines.get_tts_engine))
 
+    def test_kokoro_engine_single_stop_method_and_queue_drain(self):
+        import queue
+        import re
+        with open(os.path.join(RENPY_MOD_DIR, "tts_engines.py"), "r", encoding="utf-8") as f:
+            source = f.read()
+        kokoro_body = source.split("class KokoroEngine", 1)[1].split("def get_tts_engine", 1)[0]
+        stop_defs = re.findall(r"(?m)^\s{4}def stop\(self\):", kokoro_body)
+        self.assertEqual(len(stop_defs), 1, "KokoroEngine must not define duplicate stop(self) methods")
+
+        original_init = KokoroEngine.__init__
+        KokoroEngine.__init__ = lambda self: None
+        try:
+            engine = KokoroEngine()
+            engine.audio_queue = queue.Queue()
+            engine.stop_flag = False
+            engine.audio_queue.put("chunk1")
+            engine.audio_queue.put("chunk2")
+
+            engine.stop()
+
+            self.assertTrue(engine.stop_flag)
+            # Only the single "STOP" sentinel should remain as an unfinished task
+            self.assertEqual(engine.audio_queue.unfinished_tasks, 1)
+            self.assertEqual(engine.audio_queue.get_nowait(), "STOP")
+        finally:
+            KokoroEngine.__init__ = original_init
+
     def test_falcom_speedhack_toggle_logic(self):
         from falcom_mod.falcom_text_hook import FalcomTextHook
         hook = FalcomTextHook()

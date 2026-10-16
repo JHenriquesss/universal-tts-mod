@@ -240,12 +240,10 @@ class KokoroEngine(TTSEngine):
                     self.audio_queue.task_done()
                 except Exception:
                     break
-        except Exception: pass
-        self.audio_queue.put("STOP")
-        try:
-            import sounddevice as sd
-            sd.stop()
-        except Exception: pass
+            self.audio_queue.put("STOP")
+        except Exception:
+            pass
+        super().stop()
 
     def _get_cache_key(self, text, voice=None, speed=1.0):
         import hashlib
@@ -349,16 +347,6 @@ class KokoroEngine(TTSEngine):
         except Exception as e:
             _log_engine(f"speak_to_file error: {e}")
         return False
-
-    def stop(self):
-        self.stop_flag = True
-        try:
-            while not self.audio_queue.empty():
-                try: self.audio_queue.get_nowait()
-                except Exception: break
-            self.audio_queue.put("STOP")
-        except Exception: pass
-        super().stop()
 
 
 def get_tts_engine(lang="a"):

@@ -55,6 +55,7 @@ class TestFalcomInstaller(unittest.TestCase):
 
             # Falcom hook / launcher
             self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_text_hook.py")), destinations)
+            self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_voice_map.py")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "JOGAR_COM_TTS.bat")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_launcher.py")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_textractor.py")), destinations)
@@ -68,6 +69,7 @@ class TestFalcomInstaller(unittest.TestCase):
             )
 
     def test_install_game_copies_falcom_files(self):
+        import subprocess
         with tempfile.TemporaryDirectory() as tmpdir:
             game_root = self._make_mock_falcom_game(tmpdir)
             result = install_game(game_root)
@@ -75,6 +77,7 @@ class TestFalcomInstaller(unittest.TestCase):
             self.assertEqual(result.engine, "falcom")
             self.assertTrue(os.path.exists(os.path.join(game_root, "tts_server.py")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "falcom_text_hook.py")))
+            self.assertTrue(os.path.exists(os.path.join(game_root, "falcom_voice_map.py")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "falcom_launcher.py")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "JOGAR_COM_TTS.bat")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "tts_textractor", "TextractorCLI.exe")))
@@ -85,6 +88,15 @@ class TestFalcomInstaller(unittest.TestCase):
                 saved_hooks = stream.read()
             self.assertIn("HSFN932#4", saved_hooks)
             self.assertNotIn("RS932", saved_hooks)
+
+            # Verify installed falcom_text_hook.py imports cleanly from game_root without repo sys.path
+            proc = subprocess.run(
+                [sys.executable, "-I", "-c", f"import sys; sys.path.insert(0, {game_root!r}); import falcom_text_hook"],
+                cwd=game_root,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, proc.returncode, f"Installed falcom_text_hook failed to import: {proc.stderr}")
 
 
 if __name__ == "__main__":
