@@ -154,6 +154,7 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
         for filename in (
             "falcom_text_hook.py",
             "falcom_voice_map.py",
+            "falcom_win32_runtime.py",
             "falcom_launcher.py",
             "falcom_textractor.py",
             "JOGAR_COM_TTS.bat",

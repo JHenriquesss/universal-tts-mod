@@ -119,6 +119,9 @@ class TestChoiceOverlayCompatibility(unittest.TestCase):
         self.assertIn("choice_hints_core", source)
         self.assertNotIn("def mod_hint_chunk_color", source)
         self.assertNotIn("def mod_strip_requirement_segments", source)
+        self.assertNotIn("def _legacy_hint_chunk_color", source)
+        self.assertNotIn("def _legacy_strip_requirement_segments", source)
+        self.assertLess(len(source.splitlines()), 300, "zzz_mod_choice_consequences.rpy should stay under 300 lines")
 
 
 if __name__ == "__main__":

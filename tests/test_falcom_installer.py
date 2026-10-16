@@ -56,6 +56,7 @@ class TestFalcomInstaller(unittest.TestCase):
             # Falcom hook / launcher
             self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_text_hook.py")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_voice_map.py")), destinations)
+            self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_win32_runtime.py")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "JOGAR_COM_TTS.bat")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_launcher.py")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "falcom_textractor.py")), destinations)
@@ -78,6 +79,7 @@ class TestFalcomInstaller(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(game_root, "tts_server.py")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "falcom_text_hook.py")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "falcom_voice_map.py")))
+            self.assertTrue(os.path.exists(os.path.join(game_root, "falcom_win32_runtime.py")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "falcom_launcher.py")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "JOGAR_COM_TTS.bat")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "tts_textractor", "TextractorCLI.exe")))

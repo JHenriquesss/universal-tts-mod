@@ -612,6 +612,28 @@ class TestFalcomTextHook(unittest.TestCase):
         self.assertIn("estelle", CHARACTER_NAME_VOICE_MAP)
         self.assertIn(0, PORTRAIT_VOICE_MAP)
 
+    def test_falcom_hook_modular_decomposition_and_size_bounds(self):
+        from falcom_win32_runtime import (
+            FalcomWin32RuntimeMixin,
+            MEMORY_BASIC_INFORMATION,
+            PROCESSENTRY32,
+        )
+        from falcom_text_hook import FalcomTextHook
+
+        self.assertTrue(issubclass(FalcomTextHook, FalcomWin32RuntimeMixin))
+        self.assertIsNotNone(PROCESSENTRY32)
+        self.assertIsNotNone(MEMORY_BASIC_INFORMATION)
+
+        hook_path = os.path.join(FALCOM_MOD_DIR, "falcom_text_hook.py")
+        win32_path = os.path.join(FALCOM_MOD_DIR, "falcom_win32_runtime.py")
+        with open(hook_path, "r", encoding="utf-8") as f:
+            hook_lines = len(f.read().splitlines())
+        with open(win32_path, "r", encoding="utf-8") as f:
+            win32_lines = len(f.read().splitlines())
+
+        self.assertLess(hook_lines, 500, "falcom_text_hook.py should stay under 500 lines")
+        self.assertLess(win32_lines, 500, "falcom_win32_runtime.py should stay under 500 lines")
+
 
 if __name__ == "__main__":
     unittest.main()
