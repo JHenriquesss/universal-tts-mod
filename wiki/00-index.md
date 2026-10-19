@@ -9,6 +9,7 @@ Ren'Py TTS mod: game-side Ren'Py script sends dialogue over local socket to Koko
 - [[04-decisions.md#decisions]] — decision log by date/phase.
 - [[05-glossary.md#glossary]] — project terms.
 - [[06-open-threads.md#open-threads]] — unresolved follow-ups.
+- [[07-review-2026-10.md#revisão-de-código--2026-10]] — code review, findings by severity, execution order.
 
 ## Source Pointers
 - README: `README.md`

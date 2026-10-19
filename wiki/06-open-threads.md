@@ -4,6 +4,8 @@
 - Choice screen override remains global `screen choice(items)`; native `kwargs["hint"]` and `dialogueTextOutlines` are preserved additively via `build_additive_button_caption`.
 - TTS-only release work is complete; optional choice overlay remains opt-in.
 - No active DV carry-over after Phase 21.
+- Code review 2026-10 filed as [[07-review-2026-10.md#revisão-de-código--2026-10]]: Falcom Textractor preflight (Falcom-only), socket instance-token + `SO_EXCLUSIVEADDRUSE` for backend-stability, cache pruning during session, `SET_LANG` preserved on `STOP`, and coupled wiki+test update to stop the doc drift.
+- The wiki/test drift is currently *pinned by a green test*: `tests/test_wiki_state.py` asserts `unity_mod/unity_text_hook.py` in the architecture page and `Ran 88 tests` in the test tree, both stale. Doc and test must change in the same commit.
 
 ## Closed Bugs/Risks
 - Init-phase `renpy.notify` crash risk mitigated by deferred start callback and safe notify helper.
