@@ -121,6 +121,30 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
         self.assertIn("female_pool", source)
         self.assertIn("male_pool", source)
 
+    def test_client_reads_the_backend_instance_token_from_the_status_file(self):
+        body = self._function_body("_tts_backend_instance_token")
+
+        self.assertIn("tts_ready.txt", body)
+        self.assertIn("READY|", body)
+
+    def test_client_requests_the_instance_token_with_hello(self):
+        body = self._function_body("_tts_send_hello")
+
+        self.assertIn("HELLO", body)
+        self.assertIn("sendall", body)
+
+    def test_listener_rejects_a_backend_belonging_to_another_instance(self):
+        body = self._function_body("_tts_socket_listener")
+
+        self.assertIn("HELLO:", body)
+        self.assertIn("expected_backend_token", body)
+
+    def test_spawned_backend_token_is_captured_before_the_listener_starts(self):
+        body = self._function_body("tts_connect")
+
+        self.assertIn("expected_backend_token", body)
+        self.assertIn("_tts_send_hello", body)
+
 
 class TestRenpyAutoForwardLifecycle(unittest.TestCase):
     def _source(self):

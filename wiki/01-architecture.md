@@ -2,7 +2,8 @@
 
 ## Runtime Shape
 - Ren'Py side: `renpy_mod/tts_mod.rpy`; registers callbacks/hotkeys, starts/connects backend after Ren'Py init, sends socket commands.
-- Backend side: `renpy_mod/tts_server.py`; TCP server on `127.0.0.1:${TTS_PORT:-5050}`; accepts `STOP`, `SET_SPEED:<value>`, `QUIT`, text lines.
+- Backend side: `renpy_mod/tts_server.py`; TCP server on `127.0.0.1:${TTS_PORT:-5050}`; accepts `STOP`, `SET_SPEED:<value>`, `SET_VOICE:<voice>`, `SET_LANG:<lang>`, `HELLO`, `QUIT`, text lines.
+- Backend instance identity: every backend instance publishes a random token and binds exclusively (`SO_EXCLUSIVEADDRUSE` on Windows, `SO_REUSEADDR` on POSIX), so a leftover instance holding the port makes the new backend fail fast with an explicit error instead of silently sharing it; a client asks `HELLO` and receives `HELLO:<token>`.
 - Engine side: `renpy_mod/tts_engines.py`; supported runtime path is `KokoroEngine`; `MockEngine` test-only via `TTS_ENGINE=mock`.
 - Text cleanup: `renpy_mod/text_cleaner.py`; removes Ren'Py tags/control text, normalizes punctuation/slang/mojibake, applies default or caller-provided pronunciation overrides.
 - Choice overlay: `renpy_mod/zzz_mod_choice_consequences.rpy`; Ren'Py UI/screens; delegates core lookup/formatting and additive caption construction to `renpy_mod/choice_hints_core.py`.

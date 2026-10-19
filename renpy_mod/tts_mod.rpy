@@ -38,6 +38,9 @@ init 999 python:
             self.say_start_time = 0.0
             self.playback_done_time = 0.0
             self.current_text = ""
+            self.backend_token = None
+            self.expected_backend_token = None
+            self.stale_backend = False
             
             # Garante que speed nunca seja None, mesmo se o persistent salvou como None
             saved_speed = getattr(persistent, "tts_speed", 1.25)
@@ -82,6 +85,9 @@ init 999 python:
             self.speak_start_time = 0.0
             self.expected_duration = 0.0
             self.last_spoken = None
+            self.backend_token = None
+            self.expected_backend_token = None
+            self.stale_backend = False
             if not hasattr(self, "sock"): self.sock = None
             if not hasattr(self, "proc"): self.proc = None
             if not hasattr(self, "listening"): self.listening = False
@@ -89,15 +95,63 @@ init 999 python:
 
     tts_state = TTSState()
 
+    def _tts_backend_instance_token():
+        """Le o token de instancia publicado pelo backend no arquivo de prontidao.
+
+        Retorna None quando nao ha token publicado (ex.: backend iniciado
+        manualmente em outro diretorio), caso em que nao existe nada a comparar.
+        """
+        try:
+            status_path = os.path.join(renpy.config.gamedir, "tts_ready.txt")
+            if not os.path.exists(status_path):
+                return None
+            with open(status_path, "r", encoding="utf-8") as f:
+                status = f.read().strip()
+            if not status.startswith("READY|"):
+                return None
+            parts = status.split("|")
+            if len(parts) < 2:
+                return None
+            token = parts[1].strip()
+            return token or None
+        except Exception:
+            return None
+
+    def _tts_send_hello(sock, expected_token=None):
+        """Pede ao backend o token da instancia corrente (comando HELLO)."""
+        try:
+            payload = "HELLO:" + expected_token if expected_token else "HELLO"
+            sock.sendall((payload + "\n").encode("utf-8"))
+        except Exception:
+            pass
+        return expected_token
+
     def _tts_socket_listener(sock):
         try:
             f = sock.makefile('r')
+            expected_token = getattr(tts_state, "expected_backend_token", None)
             while tts_state.listening:
                 line = f.readline()
                 if not line:
                     tts_notify("TTS: Conexão encerrada pelo servidor.")
                     break
                 line = line.strip()
+                if line.startswith("HELLO:"):
+                    remote_token = line[6:].strip()
+                    tts_state.backend_token = remote_token
+                    if expected_token and remote_token and remote_token != expected_token:
+                        # Outra instancia do backend esta respondendo: e o backend
+                        # orfao segurando a porta. Reconectar cria um backend novo.
+                        tts_notify("TTS: outra instancia do backend esta na porta. Pressione v para reconectar.")
+                        tts_state.stale_backend = True
+                        tts_state.sock = None
+                        tts_state.listening = False
+                        try:
+                            sock.close()
+                        except Exception:
+                            pass
+                        return
+                    continue
                 if line == "PLAYBACK_DONE":
                     tts_state.is_playing = False
                     tts_state.playback_done_time = time.time()
@@ -169,20 +223,27 @@ init 999 python:
         if not quiet: tts_notify("Conectando ao servidor TTS...")
         
         # 2. Tentar conectar ao Socket (caso o usuário já tenha aberto o backend manualmente)
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2.0)
-            s.connect(("127.0.0.1", TTS_PORT))
-            s.settimeout(None) # Remove timeout para o listener não cair
-            tts_state.sock = s
-            tts_state.listening = True
-            t = threading.Thread(target=_tts_socket_listener, args=(s,))
-            t.daemon = True
-            t.start()
-            if not quiet: tts_notify("Conectado ao Backend Externo!")
-            return True
-        except Exception:
-            pass # Falhou conexão externa, tenta abrir o processo local
+        # Tentativas limitadas: um backend que ainda esta bindando nao deve custar
+        # o "jogo ficou mudo" na primeira tentativa.
+        for attempt in range(3):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(2.0)
+                s.connect(("127.0.0.1", TTS_PORT))
+                s.settimeout(None) # Remove timeout para o listener não cair
+                tts_state.sock = s
+                tts_state.listening = True
+                tts_state.stale_backend = False
+                # Backend externo: nao ha token autoritativo para comparar.
+                tts_state.expected_backend_token = None
+                _tts_send_hello(s)
+                t = threading.Thread(target=_tts_socket_listener, args=(s,))
+                t.daemon = True
+                t.start()
+                if not quiet: tts_notify("Conectado ao Backend Externo!")
+                return True
+            except Exception:
+                time.sleep(0.4)
 
 
         # 3. Abrir o processo se não estiver rodando
@@ -237,6 +298,11 @@ init 999 python:
                         s.settimeout(None) # Remove timeout para o listener não cair
                         tts_state.sock = s
                         tts_state.listening = True
+                        tts_state.stale_backend = False
+                        # Token publicado pelo backend que acabamos de iniciar. Se o
+                        # HELLO trouxer outro token, outra instancia esta na porta.
+                        tts_state.expected_backend_token = _tts_backend_instance_token()
+                        _tts_send_hello(s, tts_state.expected_backend_token)
                         t = threading.Thread(target=_tts_socket_listener, args=(s,))
                         t.daemon = True
                         t.start()

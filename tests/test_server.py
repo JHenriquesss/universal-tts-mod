@@ -398,5 +398,170 @@ class TestTTSServerHarnessHelpers(unittest.TestCase):
 
 
 
+class TestTTSServerInstanceIdentity(unittest.TestCase):
+    """
+    Estabilidade de instancia do backend.
+
+    O jogo fica mudo quando um backend orfao segura a porta 5050 ou quando o
+    cliente fala com a instancia errada. O backend passa a identificar a
+    propria instancia (token) e a falhar rapido quando a porta ja esta ocupada.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.processes = []
+        self.port = self._free_port()
+        self.log_dir = os.path.join(self.tempdir.name, "backend")
+        os.makedirs(self.log_dir)
+        self.status_path = os.path.join(self.log_dir, "tts_ready.txt")
+        self.process = self._start_backend(self.port, self.log_dir)
+        self._wait_for_status("READY|")
+
+    def tearDown(self):
+        for process in self.processes:
+            self._terminate(process)
+        if getattr(self, "tempdir", None):
+            self.tempdir.cleanup()
+
+    def _free_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((HOST, 0))
+            return sock.getsockname()[1]
+
+    def _start_backend(self, port, log_dir):
+        env = os.environ.copy()
+        env["TTS_ENGINE"] = "mock"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["TTS_LOG_DIR"] = log_dir
+        env["TTS_PORT"] = str(port)
+        process = subprocess.Popen(
+            [sys.executable, SERVER_SCRIPT, "en", "None", "1.0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        self.processes.append(process)
+        return process
+
+    def _terminate(self, process):
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _read_status(self, status_path=None):
+        path = status_path or self.status_path
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+
+    def _wait_for_status(self, prefix, status_path=None, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            status = self._read_status(status_path)
+            if status.startswith(prefix):
+                return status
+            time.sleep(0.05)
+        return self._read_status(status_path)
+
+    def test_ready_status_publishes_a_non_empty_instance_token(self):
+        status = self._wait_for_status("READY|")
+
+        self.assertTrue(status.startswith("READY|"), f"expected ready status, got {status!r}")
+        parts = status.split("|")
+        self.assertGreaterEqual(len(parts), 2, f"expected an instance token in the status, got {status!r}")
+        token = parts[1].strip()
+        self.assertTrue(token, "the instance token must not be empty")
+        self.assertNotIn(" ", token, f"the instance token must not contain spaces, got {token!r}")
+
+    def test_backend_answers_hello_with_its_instance_token(self):
+        status = self._wait_for_status("READY|")
+        expected_token = status.split("|")[1].strip()
+
+        with socket.create_connection((HOST, self.port), timeout=2.0) as sock:
+            sock.settimeout(3.0)
+            sock.sendall(b"HELLO\n")
+            reader = sock.makefile("r", encoding="utf-8")
+            reply = reader.readline().strip()
+
+        self.assertEqual("HELLO:" + expected_token, reply)
+
+    def test_second_backend_on_a_busy_port_fails_fast_with_an_actionable_error(self):
+        self._wait_for_status("READY|")
+        second_log_dir = os.path.join(self.tempdir.name, "backend2")
+        os.makedirs(second_log_dir)
+        second_status_path = os.path.join(second_log_dir, "tts_ready.txt")
+
+        second = self._start_backend(self.port, second_log_dir)
+        returncode = second.wait(timeout=15)
+
+        self.assertNotEqual(
+            0,
+            returncode,
+            "a second backend must fail fast instead of silently sharing the busy port",
+        )
+        second_status = self._read_status(second_status_path)
+        self.assertTrue(
+            second_status.startswith("ERROR|"),
+            f"expected an error status for the busy port, got {second_status!r}",
+        )
+        self.assertIn(str(self.port), second_status)
+        self.assertIsNone(
+            self.process.poll(),
+            "the backend that owns the port must keep serving",
+        )
+
+    def test_instance_tokens_differ_between_two_backends(self):
+        first_status = self._wait_for_status("READY|")
+        first_token = first_status.split("|")[1].strip()
+
+        other_port = self._free_port()
+        other_log_dir = os.path.join(self.tempdir.name, "backend-other")
+        os.makedirs(other_log_dir)
+        other_status_path = os.path.join(other_log_dir, "tts_ready.txt")
+        self._start_backend(other_port, other_log_dir)
+        other_status = self._wait_for_status("READY|", status_path=other_status_path)
+        other_token = other_status.split("|")[1].strip()
+
+        self.assertTrue(other_token, "the second backend must publish its own token")
+        self.assertNotEqual(first_token, other_token)
+
+    def test_hello_with_a_mismatched_token_is_reported_in_the_log(self):
+        self._wait_for_status("READY|")
+        log_path = os.path.join(self.log_dir, "tts_server.log")
+
+        with socket.create_connection((HOST, self.port), timeout=2.0) as sock:
+            sock.settimeout(3.0)
+            sock.sendall(b"HELLO:token-de-outra-instancia\n")
+            reader = sock.makefile("r", encoding="utf-8")
+            reader.readline()
+
+        deadline = time.time() + 5
+        messages = []
+        while time.time() < deadline:
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8") as f:
+                    messages = [json.loads(line)["msg"] for line in f if line.strip()]
+            if any("token_mismatch" in message for message in messages):
+                break
+            time.sleep(0.1)
+
+        self.assertTrue(
+            any("token_mismatch" in message for message in messages),
+            f"expected the token mismatch to be logged, got: {messages}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

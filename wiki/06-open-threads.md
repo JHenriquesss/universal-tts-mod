@@ -5,6 +5,7 @@
 - TTS-only release work is complete; optional choice overlay remains opt-in.
 - No active DV carry-over after Phase 21.
 - Code review 2026-10 filed as [[07-review-2026-10.md#revisão-de-código--2026-10]]: Falcom Textractor preflight (Falcom-only), socket instance-token + `SO_EXCLUSIVEADDRUSE` for backend-stability, cache pruning during session, `SET_LANG` preserved on `STOP`, and coupled wiki+test update to stop the doc drift.
+- P0 (Falcom Textractor preflight) and P1 (backend instance token + fail-fast port binding) were implemented on 2026-10-19; the P2/P3/P4 items of the review remain open.
 - The wiki/test drift is currently *pinned by a green test*: `tests/test_wiki_state.py` asserts `unity_mod/unity_text_hook.py` in the architecture page and `Ran 88 tests` in the test tree, both stale. Doc and test must change in the same commit.
 
 ## Closed Bugs/Risks

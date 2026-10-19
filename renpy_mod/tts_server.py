@@ -122,6 +122,16 @@ def _make_engine(lang):
         return MockEngine()
     return KokoroEngine(lang=lang)
 
+def _new_instance_token():
+    """Token que identifica esta instancia do backend.
+
+    Backend orfao segurando a porta 5050 e a principal causa do "jogo ficou
+    mudo": o cliente nao tem como saber com qual instancia esta falando.
+    """
+    import secrets
+    return secrets.token_hex(8)
+
+
 def _preview_text(text, limit=80):
     text = str(text).replace("\n", " ").replace("\r", " ")
     if len(text) <= limit:
@@ -217,8 +227,25 @@ def main():
     try:
         # Socket Server (Bind EARLY to prevent game from spawning duplicate server)
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind((host, port))
+        # SO_EXCLUSIVEADDRUSE (Windows) faz o bind falhar quando a porta ja esta
+        # ocupada, em vez de dividi-la silenciosamente com outra instancia.
+        # No POSIX, SO_REUSEADDR e o equivalente correto.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server_sock.bind((host, port))
+        except OSError as bind_error:
+            message = (
+                "porta {port} ja esta em uso por outra instancia do backend TTS. "
+                "Feche o backend anterior (ou o jogo anterior) e execute novamente."
+            ).format(port=port)
+            _log(f"bind_failed port={port} error={bind_error}")
+            print("!!! " + message)
+            with open(status_path, "w", encoding="utf-8") as f:
+                f.write("ERROR|" + message)
+            return 1
         server_sock.listen(1)
 
         engine = _make_engine(lang)
@@ -226,10 +253,11 @@ def main():
         t = threading.Thread(target=_worker, args=(engine, speed, voice), daemon=True)
         t.start()
 
-        # Handshake via arquivo (legado)
+        # Handshake via arquivo: publica o token da instancia e as vozes.
+        instance_token = _new_instance_token()
         voices_list = ",".join(get_available_voices())
         with open(status_path, "w", encoding="utf-8") as f:
-            f.write(f"READY|{voices_list}")
+            f.write(f"READY|{instance_token}|{voices_list}")
         
         _log(f"Servidor pronto.")
         print("Servidor inicializado com sucesso. Pressione Ctrl+C para encerrar.")
@@ -329,6 +357,20 @@ def main():
                                 _log("command=SET_LANG ignored=empty")
                             continue
 
+                        if line == "HELLO" or line.startswith("HELLO:"):
+                            # Pull, nao push: clientes que nao pedem (ponte Falcom,
+                            # plugin RPG Maker MZ) continuam sem ver linha extra.
+                            requested = line[6:].strip() if ":" in line else ""
+                            if requested and requested != instance_token:
+                                _log(f"handshake=token_mismatch requested={requested}")
+                            else:
+                                _log("handshake=ok")
+                            try:
+                                conn.sendall(("HELLO:" + instance_token + "\n").encode("utf-8"))
+                            except Exception:
+                                pass
+                            continue
+
                         cleaned_text = TextCleaner.clean(line)
                         if cleaned_text:
                             print(f"\n[TEXTO RECEBIDO] {cleaned_text}")
@@ -362,6 +404,9 @@ def main():
         print(f"!!! ERRO CRITICO: {e}")
         with open(status_path, "w", encoding="utf-8") as f:
             f.write("ERROR|" + str(e))
+        return 1
 
 if __name__ == "__main__":
-    main()
+    # SystemExit(main()) para que o codigo de retorno reflita a falha: sem isso
+    # o backend encerrava com 0 mesmo apos um erro critico (ex.: porta ocupada).
+    raise SystemExit(main())

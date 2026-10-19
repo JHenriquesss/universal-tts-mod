@@ -36,8 +36,11 @@ Protocol commands sent to the backend:
 - `STOP`: Stop current playback and clear queued speech.
 - `SET_SPEED:<value>`: Update speech speed.
 - `SET_VOICE:<voice>`: Update Kokoro voice for future speech (default `TTS_VOICE = "af_heart"`).
+- `HELLO` or `HELLO:<token>`: Ask which backend instance is answering. The backend replies `HELLO:<token>` with its own instance token, so a client can tell a live backend apart from a leftover one still holding the port.
 - any other non-empty line: Clean and speak that dialogue line.
 - `QUIT`: Shut down the backend.
+
+Each backend instance binds the port exclusively. When another instance is already holding it, the new backend stops with an explicit error instead of starting a second, half-working copy.
 
 ## Installation
 
