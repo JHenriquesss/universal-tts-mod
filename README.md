@@ -77,6 +77,12 @@ For the Falcom ED6 games, the same installation and launcher workflow applies to
 
 Run the installer against that game's own root folder, then start it with the generated `JOGAR_COM_TTS.bat`. `falcom_textractor.py` regenerates the correct dialogue hook automatically for the installed executable, including the supported ED6 engine variants, so manual hook searches or Textractor configuration should not be needed.
 
+The Falcom bridge requires the external **Textractor 5.2.0 x86 runtime**, which is a large third-party binary and is therefore not bundled with this repository. The installer validates that runtime up front and refuses to install a silently inoperable bridge. If the runtime lives somewhere other than `tools/Textractor-5.2.0/Textractor/x86`, point the installer at it:
+
+```bat
+python install_tts_mod.py --game-folder "path\to\GameFolder" --textractor-runtime "path\to\Textractor\x86"
+```
+
 The Falcom bridge does not use the Windows clipboard. It receives only the private output of `TextractorCLI.exe`, so text copied or typed in a browser or another application cannot be sent to TTS. The `falcom_launcher.py` supervisor records launcher output in `tts_backend_console.log` and bridge diagnostics in `falcom_text_hook.log`; it stops only the processes it created when the game exits.
 
 ## Choice Hint Extraction

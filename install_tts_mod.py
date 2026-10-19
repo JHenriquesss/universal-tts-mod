@@ -17,6 +17,12 @@ TEXTRACTOR_RUNTIME_DIR = os.path.join(
 )
 BEPINEX_PACK_DIR = os.path.join(UNITY_MOD_DIR, "bepinex_pack")
 
+# A engine Falcom depende do runtime x86 do Textractor, que e um binario externo
+# grande e de terceiros: nao e versionado neste repositorio. O preflight abaixo
+# evita uma instalacao silenciosamente invalida (sem TextractorCLI.exe a ponte
+# de dialogo nunca funciona).
+TEXTRACTOR_REQUIRED_FILES = ("TextractorCLI.exe",)
+
 RENPY_REQUIRED_GAME_FILES = (
     "tts_mod.rpy",
     "tts_server.py",
@@ -52,7 +58,7 @@ class InstallResult:
 
 def detect_game_engine(game_folder):
     """
-    Detects whether target game folder is Ren'Py, Unity or Falcom (ED6 / Trails in the Sky).
+    Detects whether target game folder is Ren'Py, Unity, RPG Maker MZ or Falcom (ED6 / Trails in the Sky).
     """
     root = os.path.abspath(game_folder)
     for current, dirnames, filenames in os.walk(root):
@@ -87,7 +93,43 @@ def find_game_root(game_folder):
     return root
 
 
-def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, choice_hints_file=None):
+class TextractorRuntimeMissing(ValueError):
+    """Runtime externo do Textractor ausente ou incompleto (engine Falcom)."""
+
+
+def validate_textractor_runtime(runtime_dir):
+    """
+    Valida o runtime do Textractor exigido pela engine Falcom.
+
+    Levanta TextractorRuntimeMissing com orientacao acionavel quando o runtime
+    nao esta disponivel, em vez de deixar a instalacao "concluir" com sucesso e
+    produzir um jogo sem a ponte de dialogo.
+    """
+    if not os.path.isdir(runtime_dir):
+        raise TextractorRuntimeMissing(
+            "Runtime do Textractor ausente em: {}. A engine Falcom exige o runtime "
+            "x86 do Textractor 5.2.0, que e uma dependencia externa e nao acompanha "
+            "este repositorio. Coloque o runtime nessa pasta (ou informe "
+            "--textractor-runtime) e execute o instalador novamente.".format(runtime_dir)
+        )
+
+    missing = [
+        name
+        for name in TEXTRACTOR_REQUIRED_FILES
+        if not os.path.isfile(os.path.join(runtime_dir, name))
+    ]
+    if missing:
+        raise TextractorRuntimeMissing(
+            "Runtime do Textractor incompleto em: {}. Arquivo(s) obrigatorio(s) "
+            "ausente(s): {}. Reinstale o runtime x86 do Textractor 5.2.0 nessa "
+            "pasta (ou informe --textractor-runtime) e execute o instalador "
+            "novamente.".format(runtime_dir, ", ".join(missing))
+        )
+
+    return runtime_dir
+
+
+def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, choice_hints_file=None, textractor_runtime_dir=None):
     engine, game_root = detect_game_engine(game_folder)
     entries = []
 
@@ -144,6 +186,10 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
                 entries.append(CopyEntry(src_plugin, os.path.join(plugin_dir, "KokoroTtsPlugin.cs")))
 
     elif engine == "falcom":
+        # Preflight: sem o runtime do Textractor a ponte de dialogo nunca funciona,
+        # entao falhar aqui e melhor do que instalar um mod silenciosamente inoperante.
+        runtime_dir = validate_textractor_runtime(textractor_runtime_dir or TEXTRACTOR_RUNTIME_DIR)
+
         # 1. Servidor backend na raiz do jogo
         for filename in ("tts_server.py", "tts_engines.py", "text_cleaner.py", "run_backend.bat"):
             source = os.path.join(RENPY_MOD_DIR, filename)
@@ -172,14 +218,14 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
             "SavedExtensions.txt",
             "Textractor.ini",
         }
-        for root_dir, _dirnames, filenames in os.walk(TEXTRACTOR_RUNTIME_DIR):
+        for root_dir, _dirnames, filenames in os.walk(runtime_dir):
             for filename in filenames:
                 if filename in excluded_configs:
                     continue
                 if filename.lower().endswith(".xdll"):
                     continue
                 source = os.path.join(root_dir, filename)
-                relative = os.path.relpath(source, TEXTRACTOR_RUNTIME_DIR)
+                relative = os.path.relpath(source, runtime_dir)
                 destination = os.path.join(game_root, "tts_textractor", relative)
                 entries.append(CopyEntry(source, destination))
 
@@ -296,6 +342,7 @@ def install_game(
     voice_map=None,
     choice_hints_file=None,
     default_voice=None,
+    textractor_runtime_dir=None,
 ):
     import re
     engine, game_root = detect_game_engine(game_folder)
@@ -304,6 +351,7 @@ def install_game(
         with_choice_overlay=with_choice_overlay,
         voice_map=voice_map,
         choice_hints_file=choice_hints_file,
+        textractor_runtime_dir=textractor_runtime_dir,
     )
     installed = []
 
@@ -379,6 +427,7 @@ def build_arg_parser():
     parser.add_argument("--choice-hints-file", help="Caminho para arquivo customizado de hints geradas (habilita overlay de escolhas).")
     parser.add_argument("--voice-map", help="Caminho para arquivo voice_map.json customizado para o jogo.")
     parser.add_argument("--default-voice", help="Voz padrão para o narrador/MC no tts_mod.rpy (ex: am_onyx, af_heart).")
+    parser.add_argument("--textractor-runtime", help="Pasta do runtime x86 do Textractor 5.2.0 (necessario para a engine Falcom).")
     parser.add_argument("--dry-run", action="store_true", help="Simula sem escrever arquivos.")
     return parser
 
@@ -393,6 +442,7 @@ def main(argv=None):
         voice_map=args.voice_map,
         choice_hints_file=args.choice_hints_file,
         default_voice=args.default_voice,
+        textractor_runtime_dir=args.textractor_runtime,
     )
 
     action = "Simulou instalação de" if args.dry_run else "Instalado"

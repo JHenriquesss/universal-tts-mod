@@ -29,6 +29,18 @@ class TestFalcomInstaller(unittest.TestCase):
             f.write("fake dir marker")
         return game_root
 
+    def _make_fake_textractor_runtime(self, root):
+        """Runtime do Textractor ficticio: o binario real e externo ao repositorio."""
+        runtime = os.path.join(root, "Textractor-5.2.0", "Textractor", "x86")
+        os.makedirs(runtime)
+        with open(os.path.join(runtime, "TextractorCLI.exe"), "wb") as f:
+            f.write(b"MZ fake textractor cli")
+        with open(os.path.join(runtime, "texthook.dll"), "wb") as f:
+            f.write(b"fake texthook")
+        with open(os.path.join(runtime, "Copy to Clipboard.xdll"), "wb") as f:
+            f.write(b"fake extension")
+        return runtime
+
     def test_detects_falcom_engine_by_exe_and_dat_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             game_root = self._make_mock_falcom_game(tmpdir)
@@ -45,7 +57,8 @@ class TestFalcomInstaller(unittest.TestCase):
     def test_build_install_plan_for_falcom_includes_backend_and_hook_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             game_root = self._make_mock_falcom_game(tmpdir)
-            entries = build_install_plan(game_root)
+            runtime = self._make_fake_textractor_runtime(tmpdir)
+            entries = build_install_plan(game_root, textractor_runtime_dir=runtime)
 
             destinations = {os.path.normpath(entry.destination) for entry in entries}
 
@@ -73,7 +86,8 @@ class TestFalcomInstaller(unittest.TestCase):
         import subprocess
         with tempfile.TemporaryDirectory() as tmpdir:
             game_root = self._make_mock_falcom_game(tmpdir)
-            result = install_game(game_root)
+            runtime = self._make_fake_textractor_runtime(tmpdir)
+            result = install_game(game_root, textractor_runtime_dir=runtime)
 
             self.assertEqual(result.engine, "falcom")
             self.assertTrue(os.path.exists(os.path.join(game_root, "tts_server.py")))
@@ -99,6 +113,50 @@ class TestFalcomInstaller(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(0, proc.returncode, f"Installed falcom_text_hook failed to import: {proc.stderr}")
+
+
+    def test_falcom_plan_raises_actionable_error_when_textractor_runtime_missing(self):
+        from install_tts_mod import TextractorRuntimeMissing
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_mock_falcom_game(tmpdir)
+            missing = os.path.join(tmpdir, "runtime-ausente")
+
+            with self.assertRaises(TextractorRuntimeMissing) as ctx:
+                build_install_plan(game_root, textractor_runtime_dir=missing)
+
+            message = str(ctx.exception)
+            self.assertIn(missing, message)
+            self.assertIn("Textractor", message)
+
+    def test_falcom_plan_raises_when_textractor_cli_binary_is_missing(self):
+        from install_tts_mod import TextractorRuntimeMissing
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_mock_falcom_game(tmpdir)
+            runtime = os.path.join(tmpdir, "runtime-incompleto")
+            os.makedirs(runtime)
+
+            with self.assertRaises(TextractorRuntimeMissing) as ctx:
+                build_install_plan(game_root, textractor_runtime_dir=runtime)
+
+            message = str(ctx.exception)
+            self.assertIn("TextractorCLI.exe", message)
+            self.assertIn(runtime, message)
+
+    def test_renpy_install_does_not_require_textractor_runtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = os.path.join(tmpdir, "JogoRenPy")
+            os.makedirs(os.path.join(game_root, "game"))
+            with open(os.path.join(game_root, "JogoRenPy.exe"), "w", encoding="utf-8") as f:
+                f.write("fake exe marker")
+
+            entries = build_install_plan(
+                game_root,
+                textractor_runtime_dir=os.path.join(tmpdir, "runtime-ausente"),
+            )
+
+            self.assertTrue(entries)
 
 
 if __name__ == "__main__":
