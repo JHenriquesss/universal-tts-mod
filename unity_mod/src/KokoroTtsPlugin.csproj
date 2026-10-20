@@ -20,6 +20,10 @@
          Desligando as duas consultas o binario fica independente do commit. -->
     <EnableSourceLink>false</EnableSourceLink>
     <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <!-- A normalizacao de caminho do ContinuousIntegrationBuild vem junto com o
+         SourceLink, entao precisa ser reposta aqui: sem ela o binario carrega o
+         caminho absoluto da maquina que o compilou. -->
+    <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
   </PropertyGroup>
 
   <ItemGroup>
