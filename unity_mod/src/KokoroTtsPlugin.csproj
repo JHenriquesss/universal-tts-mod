@@ -14,6 +14,12 @@
          muda a cada commit, quebrando a guarda de drift sozinha. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <DebugType>portable</DebugType>
+    <!-- O SDK do .NET 8 gera SourceLink para repositorios git, gravando no PDB
+         a URL com o hash do commit. O PDB mudaria a cada commit e, como o DLL
+         referencia o PDB por GUID derivado do conteudo, o DLL mudaria junto.
+         Desligando as duas consultas o binario fica independente do commit. -->
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
   </PropertyGroup>
 
   <ItemGroup>
