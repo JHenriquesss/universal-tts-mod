@@ -84,9 +84,16 @@ def detect_game_engine(game_folder):
         # Unity check
         if any(d.endswith("_Data") for d in dirnames) or "UnityPlayer.dll" in filenames or "MonoBleedingEdge" in dirnames:
             return "unity", current
-        # RPG Maker MZ / MV check
-        if "data" in dirnames and ("js" in dirnames or any(f.endswith(".json") for f in filenames)):
-            if "rmmz_core.js" in filenames or any(f.lower() in ("system.json", "actors.json") for f in filenames):
+        # RPG Maker MZ / MV check: o nucleo do jogo fica em js/ e os dados em
+        # data/. Checar os nomes desses arquivos na pasta corrente nunca casava,
+        # porque eles estao um nivel abaixo, e o fallback so olha a pasta informada.
+        if "data" in dirnames and "js" in dirnames:
+            if any(
+                os.path.exists(os.path.join(current, "js", name))
+                for name in ("rmz_core.js", "rmmz_core.js", "rmz_managers.js", "rmmz_managers.js")
+            ):
+                return "rpgmaker_mz", current
+            if any(f.lower() in ("system.json", "actors.json") for f in filenames):
                 return "rpgmaker_mz", current
             if "package.json" in filenames:
                 return "rpgmaker_mz", current

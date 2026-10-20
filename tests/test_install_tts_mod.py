@@ -29,6 +29,29 @@ class TestInstallTTSMod(unittest.TestCase):
 
             self.assertEqual(os.path.normpath(game_root), os.path.normpath(find_game_root(outer)))
 
+    def test_detects_nested_rpgmaker_mz_game_root(self):
+        """Um MZ dentro de outra pasta precisa ser detectado como o jogo real.
+
+        A deteccao por fallback so olha a pasta informada, entao um jogo
+        aninhado nunca era encontrado e o instalador abortava sem motivo claro.
+        """
+        from install_tts_mod import detect_game_engine
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outer = os.path.join(tmpdir, "Outer")
+            game_root = os.path.join(outer, "Inner")
+            os.makedirs(os.path.join(game_root, "data"))
+            os.makedirs(os.path.join(game_root, "js"))
+            with open(os.path.join(game_root, "js", "rmz_core.js"), "w", encoding="utf-8") as f:
+                f.write("// rmz_core")
+            with open(os.path.join(game_root, "data", "System.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+
+            engine, detected_root = detect_game_engine(outer)
+
+            self.assertEqual(engine, "rpgmaker_mz")
+            self.assertEqual(os.path.normpath(detected_root), os.path.normpath(game_root))
+
     def test_tts_only_plan_copies_required_files_and_root_backend_helper(self):
         from install_tts_mod import build_install_plan
 
