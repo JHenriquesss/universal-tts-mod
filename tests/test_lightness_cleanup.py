@@ -59,6 +59,49 @@ class TestKokoroOnlyLightnessCleanup(unittest.TestCase):
 
         self.assertEqual([], sorted(found))
 
+    def test_tracked_files_do_not_contain_placeholder_stubs(self):
+        """Stub de LFS ou placeholder nao pode ser versionado como se fosse artefato real.
+
+        Os arquivos de tts_models/ guardavam o conteudo "Entry not found" e
+        "Not Found" no lugar dos binarios, sem nenhuma avisao.
+        """
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "-z"],
+                cwd=ROOT_DIR,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git is not available in this environment")
+
+        stub_contents = {
+            "Entry not found",
+            "Not Found",
+            "version https://git-lfs.github.com/spec/v1",
+        }
+        offenders = []
+        for relative in result.stdout.split("\0"):
+            if not relative:
+                continue
+            path = os.path.join(ROOT_DIR, relative)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read(4096).strip()
+            except (OSError, UnicodeDecodeError):
+                continue
+            if content in stub_contents or content.startswith("version https://git-lfs"):
+                offenders.append(relative)
+
+        self.assertEqual(
+            offenders,
+            [],
+            "placeholder files must not be tracked: {}".format(offenders),
+        )
+
     def test_docs_do_not_claim_removed_runtime_protocols(self):
         readme = read_project_file("README.md")
 
