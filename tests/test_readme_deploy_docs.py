@@ -22,6 +22,10 @@ class TestReadmeDeployDocs(unittest.TestCase):
             "tts_protocol.py",
             "tts_client_state.py",
             "tts_client_voice.py",
+            "tts_client_hooks.py",
+            "tts_client_auto.py",
+            "tts_client_commands.py",
+            "tts_client_speech.py",
         ):
             self.assertIn(f"`{filename}`", self.readme)
 

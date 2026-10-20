@@ -6,8 +6,16 @@
 init 999 python: 
     import subprocess
     import os
+    import sys
     import threading
     import time
+
+    # Os modulos do cliente ficam ao lado do tts_mod.rpy na pasta game/. O
+    # Ren'Py nem sempre coloca essa pasta no sys.path, entao ela e adicionada
+    # aqui antes dos imports.
+    _tts_client_dir = getattr(renpy.config, "gamedir", None)
+    if _tts_client_dir and _tts_client_dir not in sys.path:
+        sys.path.insert(0, _tts_client_dir)
 
     from tts_client_state import TTSState
     from tts_client_voice import (
@@ -16,6 +24,21 @@ init 999 python:
         clean_speaker_name,
         collect_context_names,
         resolve_voice,
+    )
+    from tts_client_hooks import (
+        extract_callback_text,
+        install_display_hook,
+        install_phone_callback_wrappers,
+        install_save_compat_hook,
+    )
+    from tts_client_auto import AutoAdvanceController
+    from tts_client_speech import speak
+    from tts_client_commands import (
+        decrease_speed,
+        increase_speed,
+        send_speed,
+        toggle_audio,
+        toggle_auto,
     )
 
     # --- CONFIGURAÇÕES ---
@@ -258,45 +281,7 @@ init 999 python:
         return False
 
     def tts_speak(text, voice=None):
-        if not text:
-            return
-        if not tts_state.sock:
-            tts_state.is_playing = False
-            return
-        try:
-            tts_state.is_playing = True
-            tts_state.speak_start_time = time.time()
-            clean_len = len(str(text))
-            cur_speed = float(getattr(tts_state, "speed", 1.25) or 1.25)
-            tts_state.expected_duration = max(3.0, (clean_len / (10.0 * max(0.5, cur_speed))) + 4.0)
-            import sys
-            if sys.version_info[0] == 2:
-                # Python 2 (Ren'Py 7)
-                if isinstance(text, unicode):
-                    text_val = text.encode('utf-8')
-                else:
-                    text_val = str(text)
-                interpolated_text = renpy.substitute(text_val)
-                payload = interpolated_text
-            else:
-                # Python 3 (Ren'Py 8)
-                text_val = str(text)
-                interpolated_text = renpy.substitute(text_val)
-                if isinstance(interpolated_text, str):
-                    payload = interpolated_text.encode('utf-8')
-                else:
-                    payload = interpolated_text
-
-            target_voice = voice or getattr(tts_state, "current_voice", None) or TTS_VOICE
-            tts_state.sock.sendall(b"STOP\n")
-            if target_voice:
-                tts_state.sock.sendall(("SET_VOICE:" + str(target_voice) + "\n").encode('utf-8'))
-                tts_state._last_sent_voice = target_voice
-            tts_state.sock.sendall(payload + b"\n")
-        except Exception as e:
-            tts_notify("TTS falhou: " + str(e))
-            tts_state.sock = None
-            tts_state.is_playing = False
+        speak(tts_state, text, voice, TTS_VOICE, renpy.substitute, tts_notify)
 
     def _tts_extract_speaker(kwargs=None):
         who = None
@@ -342,129 +327,42 @@ init 999 python:
             tts_speak(text, voice=actual_voice)
 
     def _tts_extract_callback_text(kwargs):
-        for key in ("what", "text", "message"):
-            value = kwargs.get(key)
-            if value:
-                return value
-        return getattr(renpy.store, "_last_say_what", None)
-
-    def _tts_wrap_phone_callback(original):
-        def wrapped(event, interact=True, **kwargs):
-            try:
-                original(event, interact=interact, **kwargs)
-            except TypeError:
-                original(event, **kwargs)
-
-            if event in ("begin", "show_done"):
-                tts_speak_once(_tts_extract_callback_text(kwargs))
-
-        wrapped._tts_wrapped = True
-        return wrapped
-
-    def _tts_patch_phone_callback_function(original):
-        if getattr(original, "_tts_wrapped", False):
-            return original
-        try:
-            import types
-            original_copy = types.FunctionType(
-                original.__code__,
-                original.__globals__,
-                original.__name__,
-                original.__defaults__,
-                original.__closure__,
-            )
-            original_copy.__kwdefaults__ = getattr(original, "__kwdefaults__", None)
-
-            def patched(event, interact=True, _tts_original=original_copy, **kwargs):
-                try:
-                    _tts_original(event, interact=interact, **kwargs)
-                except TypeError:
-                    _tts_original(event, **kwargs)
-
-                if event in ("begin", "show_done"):
-                    tts_speak_once(_tts_extract_callback_text(kwargs))
-
-            original.__code__ = patched.__code__
-            original.__defaults__ = patched.__defaults__
-            original.__kwdefaults__ = patched.__kwdefaults__
-            original._tts_wrapped = True
-            return original
-        except Exception:
-            return _tts_wrap_phone_callback(original)
+        return extract_callback_text(kwargs)
 
     def _tts_install_phone_callback_wrappers():
-        # Some games render phone/NVL texts through custom Character callbacks,
-        # which can bypass the global all_character_callbacks hook.
-        for name in ("Phone_SendSound", "Phone_ReceiveSound"):
-            original = getattr(renpy.store, name, None)
-            if original and not getattr(original, "_tts_wrapped", False):
-                setattr(renpy.store, name, _tts_patch_phone_callback_function(original))
+        # Alguns jogos desenham o telefone por callbacks proprios, que passam
+        # pelo hook global de personagem.
+        install_phone_callback_wrappers(
+            renpy.store,
+            lambda text: tts_speak_once(text),
+            ("Phone_SendSound", "Phone_ReceiveSound"),
+        )
 
     def _send_speed():
-        tts_notify("Velocidade TTS: {:.2f}x".format(tts_state.speed))
-        if tts_state.sock:
-            try:
-                msg = "SET_SPEED:{}\n".format(tts_state.speed)
-                tts_state.sock.sendall(msg.encode('utf-8'))
-            except Exception:
-                pass
-
-
+        send_speed(tts_state, tts_notify)
 
     def tts_increase_speed():
-        tts_state.speed = round(min(3.0, tts_state.speed + 0.1), 2)
-        persistent.tts_speed = tts_state.speed
-        _send_speed()
+        increase_speed(tts_state, persistent, tts_notify)
 
     def tts_decrease_speed():
-        tts_state.speed = round(max(0.5, tts_state.speed - 0.1), 2)
-        persistent.tts_speed = tts_state.speed
-        _send_speed()
+        decrease_speed(tts_state, persistent, tts_notify)
 
     def tts_toggle_auto():
-        current = bool(getattr(tts_state, "auto_forward", False) or getattr(_preferences, "afm_enable", False))
-        new_state = not current
-        tts_state.auto_forward = new_state
-        try:
-            persistent.tts_auto_forward = new_state
-        except Exception: pass
-        try:
-            _preferences.afm_enable = new_state
-            _preferences.afm_after_click = True
-            if new_state and getattr(_preferences, "afm_time", 0) <= 0:
-                _preferences.afm_time = 15.0
-            renpy.restart_interaction()
-        except Exception: pass
-        status = "LIGADO" if new_state else "DESLIGADO"
-        tts_notify("Modo Automatico: {}".format(status))
-        if new_state:
-            now = time.time()
-            start = getattr(tts_state, "speak_start_time", 0.0)
-            expected = getattr(tts_state, "expected_duration", 5.0)
-            if not getattr(tts_state, "is_playing", False) or (now - start > max(expected * 2.0 + 15.0, 40.0)):
-                tts_state.is_playing = False
-                tts_state.playback_done_time = 0.0
-                tts_state.auto_advance_flag = True
+        toggle_auto(
+            tts_state,
+            persistent,
+            _preferences,
+            tts_notify,
+            lambda: renpy.restart_interaction(),
+        )
 
     def tts_toggle_audio():
-        current = bool(getattr(tts_state, "tts_audio_enabled", True))
-        new_state = not current
-        tts_state.tts_audio_enabled = new_state
-        try:
-            persistent.tts_audio_enabled = new_state
-        except Exception: pass
-        if not new_state:
-            if tts_state.sock:
-                try:
-                    tts_state.sock.sendall(b"STOP\n")
-                except Exception: pass
-            tts_state.is_playing = False
-        status = "LIGADO" if new_state else "DESLIGADO"
-        tts_notify("Áudio TTS: {}".format(status))
-        try:
-            renpy.restart_interaction()
-        except Exception: pass
-        return new_state
+        return toggle_audio(
+            tts_state,
+            persistent,
+            tts_notify,
+            lambda: renpy.restart_interaction(),
+        )
 
     def _tts_callback(event, **kwargs):
         if event == "begin":
@@ -517,95 +415,14 @@ init 999 python:
         pass
 
     def _tts_install_save_compat_hook():
-        """
-        Garante compatibilidade reversa para carregar saves antigos criados em versões ou
-        builds anteriores do jogo, prevenindo o erro:
-        'Exception: Could not load the game. Perhaps the script changed in an incompatible way.'
-        Mapeia tuplas de declarações (filename, old_version, serial) para as declarações atuais na namemap.
-        """
-        try:
-            script = getattr(renpy.game, "script", None)
-            if not script or not hasattr(script, "namemap"):
-                return
-
-            serial_map = {}
-            file_serials = {}
-            for k in script.namemap.keys():
-                if isinstance(k, tuple) and len(k) == 3:
-                    fn, ver, serial = k
-                    serial_map[(fn, serial)] = k
-                    if fn not in file_serials:
-                        file_serials[fn] = []
-                    file_serials[fn].append(serial)
-
-            for fn in file_serials:
-                file_serials[fn].sort()
-
-            orig_has_label = script.has_label
-            orig_lookup = script.lookup
-            import bisect
-
-            def resolve_compat_statement(label):
-                if label in script.namemap:
-                    return label
-                if isinstance(label, tuple) and len(label) == 3:
-                    fn, ver, serial = label
-                    if (fn, serial) in serial_map:
-                        target = serial_map[(fn, serial)]
-                        script.namemap[label] = script.namemap[target]
-                        return target
-                    if fn in file_serials and file_serials[fn]:
-                        serials = file_serials[fn]
-                        idx = bisect.bisect_right(serials, serial) - 1
-                        if idx >= 0:
-                            target = serial_map[(fn, serials[idx])]
-                        else:
-                            target = serial_map[(fn, serials[0])]
-                        script.namemap[label] = script.namemap[target]
-                        return target
-                return None
-
-            def compat_has_label(label):
-                if orig_has_label(label):
-                    return True
-                return resolve_compat_statement(label) is not None
-
-            def compat_lookup(label):
-                if label in script.namemap:
-                    return orig_lookup(label)
-                target = resolve_compat_statement(label)
-                if target:
-                    return script.namemap[target]
-                return orig_lookup(label)
-
-            script.has_label = compat_has_label
-            script.lookup = compat_lookup
-
-            # Fallback seguro para config.load_failed_label caso o jogo não defina
-            if not getattr(config, "load_failed_label", None):
-                config.load_failed_label = "_after_load"
-
-            # Previne crash do cPickle no Ren'Py 7 (TypeError: expected string, NoneType found)
-            if getattr(renpy.store, "save_name", None) is None:
-                renpy.store.save_name = ""
-        except Exception:
-            pass
+        install_save_compat_hook(getattr(renpy.game, "script", None), config, renpy.store)
 
     def _tts_install_display_hook():
-        # Hook no motor de display do Ren'Py para avisar SayBehavior e PauseBehavior
-        # que o áudio do TTS está em reprodução, impedindo avanço nativo precoce.
         try:
             import renpy.display.tts as rtts
-            if not getattr(rtts, "_tts_mod_hooked", False):
-                _orig_is_active = rtts.is_active
-                def _hooked_is_active():
-                    if getattr(tts_state, "is_playing", False):
-                        return True
-                    return _orig_is_active()
-                rtts.is_active = _hooked_is_active
-                rtts._tts_mod_hooked = True
         except Exception:
-            pass
+            return
+        install_display_hook(rtts, lambda: getattr(tts_state, "is_playing", False))
 
     def tts_start_callback():
         _tts_install_display_hook()
@@ -628,74 +445,9 @@ init 999 python:
 init python:
     class TTSAutoAdvanceAction(Action):
         def __call__(self):
-            pref_auto = getattr(renpy.store._preferences, "afm_enable", False)
-            mod_auto = getattr(tts_state, "auto_forward", False)
-            if pref_auto != mod_auto:
-                tts_state.auto_forward = pref_auto
-                try:
-                    persistent.tts_auto_forward = pref_auto
-                    renpy.store._preferences.afm_after_click = True
-                    if pref_auto and getattr(renpy.store._preferences, "afm_time", 0) <= 0:
-                        renpy.store._preferences.afm_time = 15.0
-                except Exception:
-                    pass
-                if pref_auto:
-                    now = time.time()
-                    start = getattr(tts_state, "speak_start_time", 0.0)
-                    expected = getattr(tts_state, "expected_duration", 5.0)
-                    if not getattr(tts_state, "is_playing", False) or (now - start > max(expected * 2.0 + 15.0, 40.0)):
-                        tts_state.is_playing = False
-                        tts_state.playback_done_time = 0.0
-                        tts_state.auto_advance_flag = True
-
-            auto_active = getattr(tts_state, "auto_forward", False) or getattr(renpy.store._preferences, "afm_enable", False)
-
-            # Watchdog: destrava playback se auto está ativo e o áudio excedeu o tempo esperado
-            if auto_active and getattr(tts_state, "is_playing", False):
-                now = time.time()
-                start = getattr(tts_state, "speak_start_time", 0.0)
-                expected = getattr(tts_state, "expected_duration", 5.0)
-                if now - start > max(expected * 2.0 + 15.0, 40.0):
-                    tts_state.is_playing = False
-                    tts_state.playback_done_time = now
-                    tts_state.auto_advance_flag = True
-
-            # Sincronização com áudio nativo do jogo quando TTS está desligado ou o jogo possui dublagem
-            native_playing = False
-            if hasattr(renpy, "music"):
-                try:
-                    if bool(renpy.music.get_playing("voice")) or bool(renpy.music.is_playing("voice")):
-                        native_playing = True
-                except Exception:
-                    pass
-
-            if native_playing:
-                tts_state.native_voice_detected = True
-                tts_state.native_voice_end_time = None
-            elif getattr(tts_state, "native_voice_detected", False):
-                now = time.time()
-                if getattr(tts_state, "native_voice_end_time", None) is None:
-                    tts_state.native_voice_end_time = now
-                elif now - tts_state.native_voice_end_time >= 0.7:
-                    tts_state.native_voice_detected = False
-                    tts_state.auto_advance_flag = True
-            elif auto_active and not getattr(tts_state, "tts_audio_enabled", True):
-                now = time.time()
-                start = getattr(tts_state, "say_start_time", now)
-                elapsed = now - start
-                if elapsed >= 0.35:
-                    text_len = len(getattr(tts_state, "current_text", ""))
-                    delay = max(2.0, min(5.0, (text_len * 0.05) + 1.2))
-                    if elapsed >= delay:
-                        tts_state.auto_advance_flag = True
-
-            now = time.time()
-            done_time = getattr(tts_state, "playback_done_time", 0.0)
-            is_choice = bool(renpy.get_screen("choice") or renpy.get_screen("vibor_in_scene"))
-            if getattr(tts_state, "auto_advance_flag", False) and auto_active and not is_choice:
-                if now - done_time >= 0.35:
-                    tts_state.auto_advance_flag = False
-                    renpy.end_interaction(True)
+            # O controlador nao fica no store: ele segura o modulo do Ren'Py,
+            # que nao pode ser picklado dentro de um save.
+            AutoAdvanceController(tts_state, renpy, persistent).tick()
 
 screen tts_auto_forward_checker():
     zorder 100

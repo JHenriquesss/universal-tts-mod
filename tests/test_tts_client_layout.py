@@ -99,6 +99,17 @@ def _imported_modules(source):
 
 
 class TestTTSClientLayout(unittest.TestCase):
+    def test_the_client_mod_stays_under_the_file_size_limit(self):
+        """GEMINI.md 1.4: manter os arquivos abaixo de ~500 linhas."""
+        with open(MOD_PATH, "r", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+
+        self.assertLessEqual(
+            len(lines),
+            500,
+            "tts_mod.rpy has {} lines: the client rules belong in renpy_mod/tts_client_*.py".format(len(lines)),
+        )
+
     def test_the_python_blocks_of_the_mod_compile(self):
         """Um erro de sintaxe no .rpy so apareceria dentro do jogo."""
         blocks = _python_blocks(_read_mod_source())

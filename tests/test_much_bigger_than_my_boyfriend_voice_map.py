@@ -128,12 +128,12 @@ class TestMuchBiggerThanMyBoyfriendVoiceMap(unittest.TestCase):
         self.assertIn("tts_audio_enabled", content)
 
     def test_auto_advance_respects_vibor_in_scene_and_native_voice(self):
-        tts_mod_path = os.path.join(PROJECT_ROOT, "renpy_mod", "tts_mod.rpy")
+        tts_mod_path = os.path.join(PROJECT_ROOT, "renpy_mod", "tts_client_auto.py")
         with open(tts_mod_path, "r", encoding="utf-8") as f:
             content = f.read()
 
         self.assertIn("vibor_in_scene", content)
-        self.assertIn("renpy.music.is_playing(\"voice\")", content)
+        self.assertIn("is_playing(\"voice\")", content)
 
 
 if __name__ == "__main__":

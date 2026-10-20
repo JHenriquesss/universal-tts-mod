@@ -38,6 +38,10 @@ BACKEND_RUNTIME_FILES = (
 RENPY_CLIENT_FILES = (
     "tts_client_state.py",
     "tts_client_voice.py",
+    "tts_client_hooks.py",
+    "tts_client_auto.py",
+    "tts_client_commands.py",
+    "tts_client_speech.py",
 )
 
 # Engines suportados pelo instalador: id -> nome de exibicao. Fonte de verdade

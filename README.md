@@ -27,6 +27,10 @@ Supports **Ren'Py**, **Unity**, **RPG Maker MZ**, with experimental **Falcom ED6
 - `tts_protocol.py`
 - `tts_client_state.py`
 - `tts_client_voice.py`
+- `tts_client_hooks.py`
+- `tts_client_auto.py`
+- `tts_client_commands.py`
+- `tts_client_speech.py`
 
 ### Optional choice overlay files
 

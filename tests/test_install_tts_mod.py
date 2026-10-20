@@ -69,6 +69,10 @@ class TestInstallTTSMod(unittest.TestCase):
                 "tts_protocol.py",
                 "tts_client_state.py",
                 "tts_client_voice.py",
+                "tts_client_hooks.py",
+                "tts_client_auto.py",
+                "tts_client_commands.py",
+                "tts_client_speech.py",
             ):
                 self.assertIn(os.path.normpath(os.path.join(game_dir, filename)), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "run_backend.bat")), destinations)
@@ -111,6 +115,10 @@ class TestInstallTTSMod(unittest.TestCase):
                 "tts_protocol.py",
                 "tts_client_state.py",
                 "tts_client_voice.py",
+                "tts_client_hooks.py",
+                "tts_client_auto.py",
+                "tts_client_commands.py",
+                "tts_client_speech.py",
             ):
                 self.assertTrue(os.path.exists(os.path.join(game_dir, filename)))
             self.assertTrue(os.path.exists(os.path.join(game_root, "run_backend.bat")))
