@@ -14,7 +14,13 @@ class TestReadmeDeployDocs(unittest.TestCase):
         self.lower = self.readme.lower()
 
     def test_required_deploy_file_checklist_is_precise(self):
-        for filename in ("tts_mod.rpy", "tts_server.py", "tts_engines.py", "text_cleaner.py"):
+        for filename in (
+            "tts_mod.rpy",
+            "tts_server.py",
+            "tts_engines.py",
+            "text_cleaner.py",
+            "tts_protocol.py",
+        ):
             self.assertIn(f"`{filename}`", self.readme)
 
         self.assertIn("Required files", self.readme)

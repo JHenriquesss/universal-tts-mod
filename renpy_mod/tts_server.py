@@ -76,6 +76,16 @@ try:
 
     from text_cleaner import TextCleaner
     from tts_engines import KokoroEngine, MockEngine, get_available_voices
+    from tts_protocol import (
+        CMD_HELLO,
+        CMD_PLAYBACK_DONE,
+        CMD_QUIT,
+        CMD_SET_LANG,
+        CMD_SET_SPEED,
+        CMD_SET_VOICE,
+        CMD_STOP,
+        drain_preserving,
+    )
     
     # Agora que os imports pesados acabaram, podemos silenciar
     setup_logger()
@@ -176,6 +186,12 @@ def _worker(engine, initial_speed, initial_voice):
             continue
         except Exception as e:
             _log(f"Erro no worker thread: {e}")
+            # A tarefa ja foi retirada da fila: sem o task_done o contador de
+            # pendencias cresce a cada falha.
+            try:
+                _speech_queue.task_done()
+            except ValueError:
+                pass
 
 def main():
     import socket
@@ -269,7 +285,7 @@ def main():
             with conn_lock:
                 if active_conn:
                     try:
-                        active_conn.sendall(b"PLAYBACK_DONE\n")
+                        active_conn.sendall((CMD_PLAYBACK_DONE + "\n").encode("utf-8"))
                     except Exception:
                         pass
         engine.on_playback_done = on_playback_done
@@ -293,18 +309,11 @@ def main():
                         if not line: continue
 
 
-                        if line == "STOP":
+                        if line == CMD_STOP:
                             _log("command=STOP")
-                            preserved = []
-                            while not _speech_queue.empty():
-                                try:
-                                    item = _speech_queue.get_nowait()
-                                    if item[0] in ("SET_VOICE", "SET_SPEED"):
-                                        preserved.append(item)
-                                except Exception:
-                                    break
+                            preserved = drain_preserving(_speech_queue)
                             try:
-                                _speech_queue.put_nowait(("STOP", None))
+                                _speech_queue.put_nowait((CMD_STOP, None))
                             except Exception:
                                 pass
                             for item in preserved:
@@ -313,10 +322,10 @@ def main():
                                 except Exception:
                                     pass
                             continue
-                        if line == "QUIT":
+                        if line == CMD_QUIT:
                             _log("command=QUIT")
                             return
-                        if line.startswith("SET_SPEED:"):
+                        if line.startswith(CMD_SET_SPEED + ":"):
                             raw_speed = line[10:].strip()
                             valid_speed = None
                             try:
@@ -337,7 +346,7 @@ def main():
                             else:
                                 _log(f"command=SET_SPEED ignored=invalid raw={raw_speed}")
                             continue
-                        if line.startswith("SET_VOICE:"):
+                        if line.startswith(CMD_SET_VOICE + ":"):
                             requested_voice = line[10:].strip()
                             if requested_voice:
                                 voice = requested_voice
@@ -346,7 +355,7 @@ def main():
                             else:
                                 _log("command=SET_VOICE ignored=empty")
                             continue
-                        if line.startswith("SET_LANG:"):
+                        if line.startswith(CMD_SET_LANG + ":"):
                             raw_lang = line[9:].strip()
                             normalized = _normalize_lang(raw_lang)
                             if normalized:
@@ -357,7 +366,7 @@ def main():
                                 _log("command=SET_LANG ignored=empty")
                             continue
 
-                        if line == "HELLO" or line.startswith("HELLO:"):
+                        if line == CMD_HELLO or line.startswith(CMD_HELLO + ":"):
                             # Pull, nao push: clientes que nao pedem (ponte Falcom,
                             # plugin RPG Maker MZ) continuam sem ver linha extra.
                             requested = line[6:].strip() if ":" in line else ""

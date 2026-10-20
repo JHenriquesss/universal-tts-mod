@@ -38,7 +38,13 @@ class TestInstallTTSMod(unittest.TestCase):
             entries = build_install_plan(outer)
             destinations = {os.path.normpath(entry.destination) for entry in entries}
 
-            for filename in ("tts_mod.rpy", "tts_server.py", "tts_engines.py", "text_cleaner.py"):
+            for filename in (
+                "tts_mod.rpy",
+                "tts_server.py",
+                "tts_engines.py",
+                "text_cleaner.py",
+                "tts_protocol.py",
+            ):
                 self.assertIn(os.path.normpath(os.path.join(game_dir, filename)), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "run_backend.bat")), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "JOGAR_COM_TTS.bat")), destinations)
@@ -72,7 +78,13 @@ class TestInstallTTSMod(unittest.TestCase):
             result = install_game(outer)
 
             self.assertGreaterEqual(len(result.installed), 5)
-            for filename in ("tts_mod.rpy", "tts_server.py", "tts_engines.py", "text_cleaner.py"):
+            for filename in (
+                "tts_mod.rpy",
+                "tts_server.py",
+                "tts_engines.py",
+                "text_cleaner.py",
+                "tts_protocol.py",
+            ):
                 self.assertTrue(os.path.exists(os.path.join(game_dir, filename)))
             self.assertTrue(os.path.exists(os.path.join(game_root, "run_backend.bat")))
             self.assertTrue(os.path.exists(os.path.join(game_root, "JOGAR_COM_TTS.bat")))

@@ -24,6 +24,7 @@ Supports **Ren'Py**, **Unity**, **RPG Maker MZ**, with experimental **Falcom ED6
 - `tts_server.py`
 - `tts_engines.py`
 - `text_cleaner.py`
+- `tts_protocol.py`
 
 ### Optional choice overlay files
 
@@ -37,8 +38,11 @@ Protocol commands sent to the backend:
 - `SET_SPEED:<value>`: Update speech speed.
 - `SET_VOICE:<voice>`: Update Kokoro voice for future speech (default `TTS_VOICE = "af_heart"`).
 - `HELLO` or `HELLO:<token>`: Ask which backend instance is answering. The backend replies `HELLO:<token>` with its own instance token, so a client can tell a live backend apart from a leftover one still holding the port.
+- `SET_LANG:<lang>`: Change the synthesis language at runtime (for example `SET_LANG:pt-br`).
 - any other non-empty line: Clean and speak that dialogue line.
 - `QUIT`: Shut down the backend.
+
+The backend also sends `PLAYBACK_DONE` back to the client when a line finishes playing, which is what drives the auto-advance mode.
 
 Each backend instance binds the port exclusively. When another instance is already holding it, the new backend stops with an explicit error instead of starting a second, half-working copy.
 

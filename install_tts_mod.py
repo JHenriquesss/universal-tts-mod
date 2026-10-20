@@ -23,12 +23,27 @@ BEPINEX_PACK_DIR = os.path.join(UNITY_MOD_DIR, "bepinex_pack")
 # de dialogo nunca funciona).
 TEXTRACTOR_REQUIRED_FILES = ("TextractorCLI.exe",)
 
-RENPY_REQUIRED_GAME_FILES = (
-    "tts_mod.rpy",
+# Arquivos de runtime do backend: servidor, motor de sintese, limpeza de texto e
+# o protocolo compartilhado. O tts_server.py importa tts_protocol, entao os dois
+# precisam ser entregues juntos.
+BACKEND_RUNTIME_FILES = (
     "tts_server.py",
     "tts_engines.py",
     "text_cleaner.py",
+    "tts_protocol.py",
 )
+
+# Engines suportados pelo instalador: id -> nome de exibicao. Fonte de verdade
+# para as guardas de documentacao, que exigem que todo engine listado aqui
+# apareca no README e na wiki.
+SUPPORTED_ENGINES = {
+    "renpy": "Ren'Py",
+    "unity": "Unity",
+    "rpgmaker_mz": "RPG Maker MZ",
+    "falcom": "Falcom",
+}
+
+RENPY_REQUIRED_GAME_FILES = ("tts_mod.rpy",) + BACKEND_RUNTIME_FILES
 REQUIRED_GAME_FILES = RENPY_REQUIRED_GAME_FILES
 
 RENPY_OPTIONAL_CHOICE_FILES = (
@@ -159,7 +174,7 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
 
     elif engine == "unity":
         # 1. Servidor backend na raiz do jogo
-        for filename in ("tts_server.py", "tts_engines.py", "text_cleaner.py", "run_backend.bat"):
+        for filename in BACKEND_RUNTIME_FILES + ("run_backend.bat",):
             source = os.path.join(RENPY_MOD_DIR, filename)
             if os.path.exists(source):
                 entries.append(CopyEntry(source, os.path.join(game_root, filename)))
@@ -191,7 +206,7 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
         runtime_dir = validate_textractor_runtime(textractor_runtime_dir or TEXTRACTOR_RUNTIME_DIR)
 
         # 1. Servidor backend na raiz do jogo
-        for filename in ("tts_server.py", "tts_engines.py", "text_cleaner.py", "run_backend.bat"):
+        for filename in BACKEND_RUNTIME_FILES + ("run_backend.bat",):
             source = os.path.join(RENPY_MOD_DIR, filename)
             if os.path.exists(source):
                 entries.append(CopyEntry(source, os.path.join(game_root, filename)))
@@ -231,7 +246,7 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
 
     elif engine in ("rpgmaker_mz", "rpgmaker"):
         # 1. Servidor backend na raiz do jogo
-        for filename in ("tts_server.py", "tts_engines.py", "text_cleaner.py", "run_backend.bat"):
+        for filename in BACKEND_RUNTIME_FILES + ("run_backend.bat",):
             source = os.path.join(RENPY_MOD_DIR, filename)
             if os.path.exists(source):
                 entries.append(CopyEntry(source, os.path.join(game_root, filename)))

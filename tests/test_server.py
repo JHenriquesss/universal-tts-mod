@@ -563,5 +563,35 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
         )
 
 
+    def test_server_uses_the_shared_protocol_helpers(self):
+        with open(SERVER_SCRIPT, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        self.assertIn(
+            "from tts_protocol import",
+            source,
+            "the backend must use the shared protocol constants and helpers",
+        )
+        self.assertIn(
+            "drain_preserving(_speech_queue)",
+            source,
+            "the backend must use the shared drain helper, not an inline copy of the rule",
+        )
+
+    def test_worker_marks_the_task_done_when_the_engine_raises(self):
+        with open(SERVER_SCRIPT, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        worker_body = source.split("def _worker(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("except Exception as e:", worker_body)
+        error_handler = worker_body.split("except Exception as e:", 1)[1]
+        self.assertIn(
+            "task_done()",
+            error_handler,
+            "the worker must release the task when the engine raises, otherwise "
+            "unfinished_tasks leaks on every failure",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
