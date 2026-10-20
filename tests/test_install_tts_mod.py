@@ -67,6 +67,8 @@ class TestInstallTTSMod(unittest.TestCase):
                 "tts_engines.py",
                 "text_cleaner.py",
                 "tts_protocol.py",
+                "tts_client_state.py",
+                "tts_client_voice.py",
             ):
                 self.assertIn(os.path.normpath(os.path.join(game_dir, filename)), destinations)
             self.assertIn(os.path.normpath(os.path.join(game_root, "run_backend.bat")), destinations)
@@ -107,6 +109,8 @@ class TestInstallTTSMod(unittest.TestCase):
                 "tts_engines.py",
                 "text_cleaner.py",
                 "tts_protocol.py",
+                "tts_client_state.py",
+                "tts_client_voice.py",
             ):
                 self.assertTrue(os.path.exists(os.path.join(game_dir, filename)))
             self.assertTrue(os.path.exists(os.path.join(game_root, "run_backend.bat")))

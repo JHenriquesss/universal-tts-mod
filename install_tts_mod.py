@@ -33,6 +33,13 @@ BACKEND_RUNTIME_FILES = (
     "tts_protocol.py",
 )
 
+# Modulos do cliente Ren'Py: o tts_mod.rpy importa esses arquivos, que ficam
+# ao lado dele na pasta game/ do jogo instalado. Sem eles o cliente nem inicia.
+RENPY_CLIENT_FILES = (
+    "tts_client_state.py",
+    "tts_client_voice.py",
+)
+
 # Engines suportados pelo instalador: id -> nome de exibicao. Fonte de verdade
 # para as guardas de documentacao, que exigem que todo engine listado aqui
 # apareca no README e na wiki.
@@ -43,7 +50,7 @@ SUPPORTED_ENGINES = {
     "falcom": "Falcom",
 }
 
-RENPY_REQUIRED_GAME_FILES = ("tts_mod.rpy",) + BACKEND_RUNTIME_FILES
+RENPY_REQUIRED_GAME_FILES = ("tts_mod.rpy",) + RENPY_CLIENT_FILES + BACKEND_RUNTIME_FILES
 REQUIRED_GAME_FILES = RENPY_REQUIRED_GAME_FILES
 
 RENPY_OPTIONAL_CHOICE_FILES = (

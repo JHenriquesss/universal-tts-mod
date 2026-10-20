@@ -26,7 +26,8 @@
 - The client captures the token published by the backend it spawned and refuses to speak through a backend answering with a different token.
 
 ## Packaging Boundary
-- TTS-only deploy payload: `game/tts_mod.rpy`, `game/tts_server.py`, `game/tts_engines.py`, `game/text_cleaner.py`, `game/tts_protocol.py`, root `run_backend.bat`.
+- TTS-only deploy payload: `game/tts_mod.rpy`, `game/tts_server.py`, `game/tts_engines.py`, `game/text_cleaner.py`, `game/tts_protocol.py`, `game/tts_client_state.py`, `game/tts_client_voice.py`, root `run_backend.bat`.
+- The Ren'Py client is split into modules that sit next to `tts_mod.rpy` in `game/`: `tts_client_state.py` holds the shared state and `tts_client_voice.py` holds the voice resolution rules. Both take their dependencies by injection, so they can be tested without Ren'Py, and a guard fails the build if an imported module is not part of the install payload.
 - `install_tts_mod.py --game-folder <folder>` copies same payload into detected game root; default excludes choice overlay.
 - `release_manifest.py --check` verifies payload sources exist without mutating game folders.
 - `release_manifest.py --archive <zip>` writes zip entries exactly matching manifest destinations; `--archive` without value writes default `renpy-tts-mod-1.0.0.zip`.

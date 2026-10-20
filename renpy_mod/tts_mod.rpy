@@ -8,7 +8,15 @@ init 999 python:
     import os
     import threading
     import time
-    import re
+
+    from tts_client_state import TTSState
+    from tts_client_voice import (
+        BF_NAME_KEYS,
+        PLAYER_NAME_KEYS,
+        clean_speaker_name,
+        collect_context_names,
+        resolve_voice,
+    )
 
     # --- CONFIGURAÇÕES ---
     TTS_ENGINE = "kokoro"   
@@ -17,83 +25,7 @@ init 999 python:
     TTS_PORT = 5050
     # -------------------
 
-    class TTSState(object):
-        def __init__(self):
-            self.proc = None
-            self.sock = None
-            self.voices = []
-            self.last_spoken = None
-            saved_auto = getattr(persistent, "tts_auto_forward", False)
-            self.auto_forward = bool(saved_auto) if saved_auto is not None else False
-            self.auto_advance_flag = False
-            self.listening = False
-            self.is_playing = False
-            self.speak_start_time = 0.0
-            self.expected_duration = 0.0
-
-            saved_tts_audio = getattr(persistent, "tts_audio_enabled", True)
-            self.tts_audio_enabled = bool(saved_tts_audio) if saved_tts_audio is not None else True
-            self.native_voice_detected = False
-            self.native_voice_end_time = None
-            self.say_start_time = 0.0
-            self.playback_done_time = 0.0
-            self.current_text = ""
-            self.backend_token = None
-            self.expected_backend_token = None
-            self.stale_backend = False
-            
-            # Garante que speed nunca seja None, mesmo se o persistent salvou como None
-            saved_speed = getattr(persistent, "tts_speed", 1.25)
-            self.speed = float(saved_speed) if saved_speed is not None else 1.25
-            self.current_voice = TTS_VOICE
-            self.voice_map = {}
-            self._last_sent_voice = None
-            self._load_voice_map()
-
-        def _load_voice_map(self):
-            try:
-                import json
-                for base in (getattr(renpy.config, "gamedir", None), getattr(renpy.config, "basedir", None)):
-                    if base:
-                        map_path = os.path.join(base, "voice_map.json")
-                        if os.path.isfile(map_path):
-                            with open(map_path, "r", encoding="utf-8") as f:
-                                self.voice_map.update(json.load(f))
-            except Exception:
-                pass
-
-        def __getstate__(self):
-            return {
-                "auto_forward": getattr(self, "auto_forward", False),
-                "speed": getattr(self, "speed", 1.25),
-                "current_voice": getattr(self, "current_voice", TTS_VOICE),
-                "tts_audio_enabled": getattr(self, "tts_audio_enabled", True)
-            }
-
-        def __setstate__(self, d):
-            self.auto_forward = d.get("auto_forward", False)
-            self.speed = d.get("speed", 1.25)
-            self.current_voice = d.get("current_voice", TTS_VOICE)
-            self.tts_audio_enabled = d.get("tts_audio_enabled", True)
-            self.is_playing = False
-            self.auto_advance_flag = False
-            self.native_voice_detected = False
-            self.native_voice_end_time = None
-            self.say_start_time = 0.0
-            self.playback_done_time = 0.0
-            self.current_text = ""
-            self.speak_start_time = 0.0
-            self.expected_duration = 0.0
-            self.last_spoken = None
-            self.backend_token = None
-            self.expected_backend_token = None
-            self.stale_backend = False
-            if not hasattr(self, "sock"): self.sock = None
-            if not hasattr(self, "proc"): self.proc = None
-            if not hasattr(self, "listening"): self.listening = False
-            self._load_voice_map()
-
-    tts_state = TTSState()
+    tts_state = TTSState(persistent=persistent, default_voice=TTS_VOICE, config=renpy.config)
 
     def _tts_backend_instance_token():
         """Le o token de instancia publicado pelo backend no arquivo de prontidao.
@@ -373,28 +305,16 @@ init 999 python:
         if not who:
             who = getattr(renpy.store, "_last_say_who", None)
         if who:
-            def _clean_speaker_name(raw):
-                if not raw:
-                    return None
-                try:
-                    sub = renpy.substitute(str(raw))
-                    cleaned = re.sub(r'\{[^}]*\}', '', sub).strip()
-                    if cleaned:
-                        return cleaned
-                except Exception:
-                    pass
-                return re.sub(r'\{[^}]*\}', '', str(raw)).strip()
-
             if isinstance(who, str):
                 who_str = who.strip()
                 char_obj = getattr(renpy.store, who_str, None)
                 if char_obj and hasattr(char_obj, "name"):
-                    cleaned = _clean_speaker_name(getattr(char_obj, "name", None))
+                    cleaned = clean_speaker_name(getattr(char_obj, "name", None), renpy.substitute)
                     if cleaned:
                         return cleaned
                 return who_str
             if hasattr(who, "name"):
-                cleaned = _clean_speaker_name(who.name)
+                cleaned = clean_speaker_name(who.name, renpy.substitute)
                 if cleaned:
                     return cleaned
             return str(who).strip()
@@ -402,85 +322,16 @@ init 999 python:
 
     def _tts_resolve_voice(speaker=None):
         voice_map = getattr(tts_state, "voice_map", {})
-        if not speaker:
-            last_who = str(getattr(renpy.store, "_last_say_who", "")).strip().lower()
-            if last_who:
-                for k, v in voice_map.items():
-                    if k.lower() == last_who:
-                        return v
-            return (
-                voice_map.get("narrator")
-                or voice_map.get("player")
-                or voice_map.get("default")
-                or getattr(tts_state, "current_voice", None)
-                or TTS_VOICE
-            )
-
-        speaker_clean = str(speaker).strip()
-        speaker_lower = speaker_clean.lower()
-
-        for k, v in voice_map.items():
-            if k.lower() == speaker_lower:
-                return v
-
-        # Normalize thought suffixes (e.g. "Mia's thoughts", "Mia’s thoughts", "Mia's thought" -> "Mia")
-        base_speaker = re.sub(r"['’]s?\s+thoughts?", "", speaker_clean, flags=re.IGNORECASE).strip()
-        base_lower = base_speaker.lower()
-        if base_lower != speaker_lower:
-            for k, v in voice_map.items():
-                if k.lower() == base_lower:
-                    return v
-            speaker_lower = base_lower
-
-        def _get_context_names(keys):
-            found = set()
-            for obj in (getattr(renpy, "store", None), getattr(renpy, "persistent", None)):
-                if obj:
-                    for attr in keys:
-                        val = getattr(obj, attr, None)
-                        if val is not None:
-                            s = str(val).strip().lower()
-                            if s:
-                                found.add(s)
-            return found
-
-        # Check player / protagonist name variables across store and persistent
-        player_names = _get_context_names((
-            "player_name", "povname", "pc_name", "mc_name", "mcname", "mcN", "mcn",
-            "hero_name", "protagonist_name", "user_name", "name", "firstname",
-            "first_name", "galleryMC", "gallerymc"
-        ))
-        protagonist_aliases = (
-            "player", "mc", "anon", "[player_name]", "[povname]",
-            "[firstname]", "narrarator", "narrator", "me", "you"
+        context_sources = (getattr(renpy, "store", None), getattr(renpy, "persistent", None))
+        return resolve_voice(
+            speaker=speaker,
+            voice_map=voice_map,
+            player_names=collect_context_names(PLAYER_NAME_KEYS, context_sources),
+            bf_names=collect_context_names(BF_NAME_KEYS, context_sources),
+            current_voice=getattr(tts_state, "current_voice", None),
+            default_voice=TTS_VOICE,
+            last_speaker=getattr(renpy.store, "_last_say_who", ""),
         )
-        if (speaker_lower in protagonist_aliases) or (speaker_lower in player_names):
-            return voice_map.get("mc") or voice_map.get("player") or voice_map.get("narrator") or voice_map.get("default") or "am_onyx"
-
-        # Check boyfriend / partner name variables across store and persistent
-        bf_names = _get_context_names(("bfname", "bf_name", "boyfriend_name"))
-        if (speaker_lower in ("bf", "boyfriend", "[bfname]")) or (speaker_lower in bf_names):
-            return voice_map.get("bf") or voice_map.get("boyfriend") or "am_adam"
-
-
-        male_words = {
-            "man", "boy", "guy", "male", "dad", "father", "brother", "mr", "sir",
-            "uncle", "grandfather", "grandpa", "doctor", "cop", "police", "officer",
-            "waiter", "mechanic", "landlord", "husband", "butler", "agent", "bodyguard",
-            "hermit", "dentist", "clerk", "priest", "king", "prince", "lord", "coach"
-        }
-        tokens = set(re.findall(r'[a-z]+', speaker_lower))
-        if tokens & male_words:
-            male_pool = ["am_adam", "am_fenrir", "am_eric", "am_michael", "am_onyx", "am_puck"]
-            h = sum(ord(c) for c in speaker_lower) % len(male_pool)
-            return male_pool[h]
-
-        female_pool = [
-            "af_heart", "af_bella", "af_sarah", "af_sky",
-            "af_nicole", "af_kore", "af_aoede", "af_jessica", "af_river"
-        ]
-        h = sum(ord(c) for c in speaker_lower) % len(female_pool)
-        return female_pool[h]
 
     def tts_speak_once(text, voice=None):
         if not text:

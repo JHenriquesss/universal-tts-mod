@@ -252,28 +252,32 @@ class TestTtsCacheAndMultiVoice(unittest.TestCase):
         self.assertTrue(hook.tts_enabled)
 
     def test_renpy_gender_aware_voice_resolution(self):
-        import re
-        with open(os.path.join(RENPY_MOD_DIR, "tts_mod.rpy"), "r", encoding="utf-8") as f:
-            source = f.read()
+        from tts_client_voice import (
+            BF_NAME_KEYS,
+            PLAYER_NAME_KEYS,
+            collect_context_names,
+            resolve_voice,
+        )
 
-        match = re.search(r"(?ms)^    def _tts_resolve_voice\(speaker=None\):\n(.*?)(?=^    def |\Z)", source)
-        self.assertIsNotNone(match)
-        code = "def _tts_resolve_voice(speaker=None):\n" + match.group(1)
-
-        fake_scope = {
-            "re": re,
-            "TTS_VOICE": "af_heart",
-            "tts_state": type("State", (), {"voice_map": {
-                "player": "am_adam",
-                "narrator": "am_adam",
-                "default": "am_adam",
-                "mia": "af_heart",
-                "ava": "af_bella",
-            }, "current_voice": "am_adam"}),
-            "renpy": type("Renpy", (), {"store": type("Store", (), {"povname": "Carlos", "_last_say_who": "player"})}),
+        voice_map = {
+            "player": "am_adam",
+            "narrator": "am_adam",
+            "default": "am_adam",
+            "mia": "af_heart",
+            "ava": "af_bella",
         }
-        exec(code, fake_scope)
-        resolve_func = fake_scope["_tts_resolve_voice"]
+        store = type("Store", (), {"povname": "Carlos", "_last_say_who": "player"})()
+
+        def resolve_func(speaker):
+            return resolve_voice(
+                speaker=speaker,
+                voice_map=voice_map,
+                player_names=collect_context_names(PLAYER_NAME_KEYS, (store,)),
+                bf_names=collect_context_names(BF_NAME_KEYS, (store,)),
+                current_voice="am_adam",
+                default_voice="af_heart",
+                last_speaker=store._last_say_who,
+            )
 
         # Protagonist / Narration tests
         self.assertEqual(resolve_func(None), "am_adam")
@@ -286,16 +290,16 @@ class TestTtsCacheAndMultiVoice(unittest.TestCase):
         self.assertEqual(resolve_func("[player_name]"), "am_adam")
 
         # Support for player_name attribute in store
-        fake_scope["renpy"].store.player_name = "Liam"
+        store.player_name = "Liam"
         self.assertEqual(resolve_func("Liam"), "am_adam")
         self.assertEqual(resolve_func("liam"), "am_adam")
 
         # Support for mcN and mcname in store / persistent
-        fake_scope["renpy"].store.mcN = "Marcus"
+        store.mcN = "Marcus"
         self.assertEqual(resolve_func("Marcus"), "am_adam")
         self.assertEqual(resolve_func("marcus"), "am_adam")
 
-        fake_scope["renpy"].store.mcname = "Arthur"
+        store.mcname = "Arthur"
         self.assertEqual(resolve_func("Arthur"), "am_adam")
 
 

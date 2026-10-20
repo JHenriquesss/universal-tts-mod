@@ -20,6 +20,8 @@ class TestReadmeDeployDocs(unittest.TestCase):
             "tts_engines.py",
             "text_cleaner.py",
             "tts_protocol.py",
+            "tts_client_state.py",
+            "tts_client_voice.py",
         ):
             self.assertIn(f"`{filename}`", self.readme)
 

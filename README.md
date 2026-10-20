@@ -25,6 +25,8 @@ Supports **Ren'Py**, **Unity**, **RPG Maker MZ**, with experimental **Falcom ED6
 - `tts_engines.py`
 - `text_cleaner.py`
 - `tts_protocol.py`
+- `tts_client_state.py`
+- `tts_client_voice.py`
 
 ### Optional choice overlay files
 

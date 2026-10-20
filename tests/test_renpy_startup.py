@@ -117,9 +117,10 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
         self.assertLess(body.index('sendall(b"STOP\\n")'), body.index('"SET_VOICE:"'))
 
     def test_gender_aware_voice_resolution(self):
-        source = self._source()
-        self.assertIn("female_pool", source)
-        self.assertIn("male_pool", source)
+        with open(os.path.join(ROOT_DIR, "renpy_mod", "tts_client_voice.py"), "r", encoding="utf-8") as f:
+            source = f.read()
+        self.assertIn("FEMALE_POOL", source)
+        self.assertIn("MALE_POOL", source)
 
     def test_client_reads_the_backend_instance_token_from_the_status_file(self):
         body = self._function_body("_tts_backend_instance_token")
@@ -195,7 +196,8 @@ class TestRenpyAutoForwardLifecycle(unittest.TestCase):
         )
 
     def test_tts_state_setstate_does_not_clobber_active_connection(self):
-        source = self._source()
+        with open(os.path.join(ROOT_DIR, "renpy_mod", "tts_client_state.py"), "r", encoding="utf-8") as f:
+            source = f.read()
         self.assertIn("def __setstate__(self", source)
         setstate_match = re.search(r"(?ms)def __setstate__\(self, d\):.*?(?=def |\Z)", source)
         self.assertIsNotNone(setstate_match)

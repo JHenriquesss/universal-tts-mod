@@ -2,7 +2,7 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 328 tests in 9.2s OK` (2026-10-19, after the P4 TextCleaner block).
+- Latest evidence: `Ran 351 tests in 9.0s OK` (2026-10-19, after the P4 client split block).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
 - The recorded count is the count of the **committed** trunk: copy it from the output of
@@ -19,6 +19,9 @@
 | Socket protocol | `tests/test_server.py` | Mock backend starts on isolated port; accepts `SET_SPEED`, `SET_VOICE`, `SET_LANG`, `STOP`, `HELLO`, text, `QUIT`; ignores empty cleaned text; no real Kokoro/audio dependency. |
 | Backend instance identity | `tests/test_server.py` | Token published per instance, `HELLO` handshake, busy port fails fast with an actionable error, tokens differ between backends, token mismatch is logged. |
 | Protocol rules | `tests/test_tts_protocol.py` | `STOP` preserves voice/speed/language, discarded tasks are released, preserved configuration stays pending for the worker. |
+| Client voice layer | `tests/test_tts_client_voice.py` | Speaker name cleanup, store context names, thought suffix, voice map hits, protagonist/partner aliases, male/female pools. |
+| Client state | `tests/test_tts_client_state.py` | State restored from the persistent, voice map loaded from the game folder, the voice map surviving a save and load. |
+| Client layout | `tests/test_tts_client_layout.py` | The python blocks of the mod compile, the public client API stays available, every imported client module ships with the mod. |
 | Ren'Py startup/lifecycle | `tests/test_renpy_startup.py` | Auto-connect deferred; safe notify helper; `tts_kill()` sends `QUIT`, closes socket, waits/escalates process; bad socket reference cleared; instance token captured and mismatched instance rejected. |
 | Auto-advance | `tests/test_auto_advance.py` | Auto-forward on playback end, user interaction resets, no afm callback blocking. |
 | Cache and multi-voice | `tests/test_tts_cache_and_multivoice.py` | Cache key and storage, cache pruning during the session, model version in the cache key, Falcom portrait voice map, single `stop()` and queue drain. |
