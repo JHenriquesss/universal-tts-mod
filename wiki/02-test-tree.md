@@ -2,7 +2,7 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 318 tests in 6.4s OK` (2026-10-19, after the P2 protocol/cache block).
+- Latest evidence: `Ran 322 tests in 6.4s OK` (2026-10-19, after the P3 Unity plugin block).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
 
