@@ -5,23 +5,51 @@
     <RootNamespace>KokoroTts</RootNamespace>
     <OutputPath>..\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+
+    <!-- Build reproduzivel: o binario commitado precisa sair igual no CI e na
+         maquina local, senao a guarda de drift nao fecha. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <!-- Sem isso o SDK embute o hash do commit no ProductVersion e o binario
+         muda a cada commit, quebrando a guarda de drift sozinha. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <DebugType>portable</DebugType>
+    <!-- O SDK do .NET 8 gera SourceLink para repositorios git, gravando no PDB
+         a URL com o hash do commit. O PDB mudaria a cada commit e, como o DLL
+         referencia o PDB por GUID derivado do conteudo, o DLL mudaria junto.
+         Desligando as duas consultas o binario fica independente do commit. -->
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <!-- A normalizacao de caminho do ContinuousIntegrationBuild vem junto com o
+         SourceLink, entao precisa ser reposta aqui: sem ela o binario carrega o
+         caminho absoluto da maquina que o compilou. -->
+    <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Private=false: o plugin nao deve embutir o runtime do BepInEx nem as
+         assemblies do Unity. O jogo ja fornece os dois em tempo de execucao, e
+         sem isso o MSBuild copia a cadeia de dependencias para a pasta de
+         saida, recriando os binarios duplicados a cada build. -->
     <Reference Include="BepInEx">
       <HintPath>..\bepinex_pack\BepInEx\core\BepInEx.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>..\lib\UnityEngine.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>..\lib\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.UI.dll</HintPath>
+      <HintPath>..\lib\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>D:\Games\Bflar030c\Bflar030c\BattleforLuvia_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <HintPath>..\lib\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
 </Project>

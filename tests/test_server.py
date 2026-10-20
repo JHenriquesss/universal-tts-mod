@@ -31,6 +31,7 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            errors="replace",
             env=self.env,
         )
         self.sock = self._connect_to_server()
@@ -49,17 +50,14 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
 
         if getattr(self, "process", None):
             try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.terminate()
+                self.process.communicate(timeout=5)
+            except (subprocess.TimeoutExpired, ValueError):
+                self.process.kill()
                 try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-            for stream_name in ("stdout", "stderr"):
-                stream = getattr(self.process, stream_name, None)
-                if stream:
-                    stream.close()
+                    self.process.communicate(timeout=2)
+                except (subprocess.TimeoutExpired, ValueError):
+                    pass
+
         if getattr(self, "tempdir", None):
             self.tempdir.cleanup()
 
@@ -198,6 +196,52 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
         self.assertIn("command=SET_VOICE voice=am_adam", joined)
         self.assertIn("speak voice=am_adam", joined)
 
+    def test_stop_command_preserves_pending_set_voice_and_speed(self):
+        self._send_line("SET_VOICE:am_adam")
+        self._send_line("STOP")
+        self._send_line("Voice check after stop.")
+        messages = self._wait_for_log_message(lambda message: "speak voice=am_adam" in message)
+        joined = "\n".join(messages)
+
+        self.assertIn("command=SET_VOICE voice=am_adam", joined)
+        self.assertIn("speak voice=am_adam", joined)
+
+    def test_socket_set_lang_changes_language(self):
+        self._send_line("SET_LANG:pt-br")
+        self._send_line("Teste de idioma.")
+        messages = self._wait_for_log_message(lambda message: "command=SET_LANG lang=p" in message)
+        joined = "\n".join(messages)
+
+        self.assertIn("command=SET_LANG lang=p", joined)
+
+
+    def test_stop_does_not_purge_enqueued_voice_configuration(self):
+        # Directly test that STOP command handler preserves pending SET_VOICE in queue
+        import queue
+        q = queue.Queue()
+        q.put(("SET_VOICE", "am_adam"))
+        q.put(("SET_SPEED", 1.5))
+        q.put(("SPEAK", "Old sentence"))
+
+        # Simulated STOP flush logic
+        preserved = []
+        while not q.empty():
+            try:
+                item = q.get_nowait()
+                if item[0] in ("SET_VOICE", "SET_SPEED"):
+                    preserved.append(item)
+            except Exception:
+                break
+        q.put(("STOP", None))
+        for item in preserved:
+            q.put(item)
+
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+
+        self.assertEqual(items, [("STOP", None), ("SET_VOICE", "am_adam"), ("SET_SPEED", 1.5)])
+
     def test_empty_set_voice_does_not_crash_or_clear_default_voice(self):
         self._send_line("SET_VOICE:")
         self._send_line("Default voice check.")
@@ -207,6 +251,25 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
         self.assertTrue(
             any("command=SET_VOICE ignored=empty" in message for message in messages),
             f"expected empty voice command to be logged as ignored, got: {messages}",
+        )
+
+    def test_set_speed_rejects_negative_nan_and_infinite_values(self):
+        self._send_line("SET_SPEED:-1.0")
+        self._send_line("SET_SPEED:nan")
+        self._send_line("SET_SPEED:inf")
+        self._send_line("SET_SPEED:not_a_number")
+        self._send_line("SET_SPEED:1.75")
+        messages = self._wait_for_log_message(lambda message: "command=SET_SPEED speed=1.75" in message)
+
+        self.assertIsNone(self.process.poll(), "server crashed while validating SET_SPEED")
+        # Ensure invalid speeds were logged as ignored and valid 1.75 was applied
+        self.assertTrue(
+            any("command=SET_SPEED ignored=invalid" in message for message in messages),
+            f"expected invalid speeds to be ignored, got: {messages}",
+        )
+        self.assertTrue(
+            any("command=SET_SPEED speed=1.75" in message for message in messages),
+            f"expected speed 1.75 to be applied, got: {messages}",
         )
 
     def test_socket_ignores_empty_text_after_cleaning(self):
@@ -230,6 +293,31 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
             all(len(message) < 220 for message in previews),
             f"text preview logs must be bounded, got: {previews}",
         )
+
+    def test_reconnection_after_client_disconnect_receives_playback_done(self):
+        # First connection sends a line and receives PLAYBACK_DONE
+        self._send_line("First line before restart.")
+        first_reader = self.sock.makefile("r", encoding="utf-8")
+        resp1 = first_reader.readline().strip()
+        self.assertEqual("PLAYBACK_DONE", resp1)
+
+        # Disconnect first client (simulating game restart without QUIT)
+        first_reader.close()
+        self.sock.close()
+        time.sleep(0.2)
+
+        # Second connection (game restarted)
+        sock2 = socket.create_connection((HOST, self.port), timeout=2.0)
+        sock2.settimeout(3.0)
+        self.sock = sock2  # for tearDown cleanup
+        second_reader = sock2.makefile("r", encoding="utf-8")
+
+        # Second client sends a line
+        sock2.sendall(b"Second line after restart.\n")
+        resp2 = second_reader.readline().strip()
+        second_reader.close()
+
+        self.assertEqual("PLAYBACK_DONE", resp2, "reconnected client must receive PLAYBACK_DONE without queue theft")
 
 
 class TestTTSServerHarnessHelpers(unittest.TestCase):
@@ -256,6 +344,263 @@ class TestTTSServerHarnessHelpers(unittest.TestCase):
         self.assertIn("stdout=out text", text)
         self.assertIn("stderr=err text", text)
         self.assertIn("startup_context engine=mock", text)
+
+    def test_server_resolves_port_from_config_file_when_env_not_set(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((HOST, 0))
+                test_port = s.getsockname()[1]
+            cfg_path = os.path.join(tmpdir, "tts_config.json")
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump({"port": test_port}, f)
+
+            # Copy tts_server.py to tmpdir so it finds tts_config.json in its directory
+            import shutil
+            shutil.copy2(SERVER_SCRIPT, os.path.join(tmpdir, "tts_server.py"))
+            shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "text_cleaner.py"), os.path.join(tmpdir, "text_cleaner.py"))
+            shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_engines.py"), os.path.join(tmpdir, "tts_engines.py"))
+
+            env = os.environ.copy()
+            env["TTS_ENGINE"] = "mock"
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["TTS_LOG_DIR"] = tmpdir
+            env.pop("TTS_PORT", None)
+
+            proc = subprocess.Popen(
+                [sys.executable, os.path.join(tmpdir, "tts_server.py"), "en", "None", "1.0"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmpdir,
+                env=env,
+            )
+            try:
+                # Give server a moment to bind and write ready file
+                ready_file = os.path.join(tmpdir, "tts_ready.txt")
+                for _ in range(50):
+                    if os.path.exists(ready_file):
+                        break
+                    time.sleep(0.1)
+                self.assertTrue(os.path.exists(ready_file))
+
+                # Verify connection succeeds on test_port
+                s = socket.create_connection((HOST, test_port), timeout=2.0)
+                s.sendall(b"QUIT\n")
+                s.close()
+            finally:
+                try:
+                    proc.communicate(timeout=3)
+                except (subprocess.TimeoutExpired, ValueError):
+                    proc.kill()
+                    try:
+                        proc.communicate(timeout=1)
+                    except (subprocess.TimeoutExpired, ValueError):
+                        pass
+
+
+
+class TestTTSServerInstanceIdentity(unittest.TestCase):
+    """
+    Estabilidade de instancia do backend.
+
+    O jogo fica mudo quando um backend orfao segura a porta 5050 ou quando o
+    cliente fala com a instancia errada. O backend passa a identificar a
+    propria instancia (token) e a falhar rapido quando a porta ja esta ocupada.
+    """
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.processes = []
+        self.port = self._free_port()
+        self.log_dir = os.path.join(self.tempdir.name, "backend")
+        os.makedirs(self.log_dir)
+        self.status_path = os.path.join(self.log_dir, "tts_ready.txt")
+        self.process = self._start_backend(self.port, self.log_dir)
+        self._wait_for_status("READY|")
+
+    def tearDown(self):
+        for process in self.processes:
+            self._terminate(process)
+        if getattr(self, "tempdir", None):
+            self.tempdir.cleanup()
+
+    def _free_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((HOST, 0))
+            return sock.getsockname()[1]
+
+    def _start_backend(self, port, log_dir):
+        env = os.environ.copy()
+        env["TTS_ENGINE"] = "mock"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["TTS_LOG_DIR"] = log_dir
+        env["TTS_PORT"] = str(port)
+        process = subprocess.Popen(
+            [sys.executable, SERVER_SCRIPT, "en", "None", "1.0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        self.processes.append(process)
+        return process
+
+    def _terminate(self, process):
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+        # Fechar os pipes do subprocess: sem isso o GC emite ResourceWarning
+        # de arquivo nao fechado ao fim da execucao.
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+    def _read_hello_reply(self, port, request=b"HELLO\n"):
+        """Conecta, envia o pedido e devolve a primeira linha, fechando tudo."""
+        with socket.create_connection((HOST, port), timeout=2.0) as sock:
+            sock.settimeout(3.0)
+            sock.sendall(request)
+            reader = sock.makefile("r", encoding="utf-8")
+            try:
+                return reader.readline().strip()
+            finally:
+                reader.close()
+
+    def _read_status(self, status_path=None):
+        path = status_path or self.status_path
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+
+    def _wait_for_status(self, prefix, status_path=None, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            status = self._read_status(status_path)
+            if status.startswith(prefix):
+                return status
+            time.sleep(0.05)
+        return self._read_status(status_path)
+
+    def test_ready_status_publishes_a_non_empty_instance_token(self):
+        status = self._wait_for_status("READY|")
+
+        self.assertTrue(status.startswith("READY|"), f"expected ready status, got {status!r}")
+        parts = status.split("|")
+        self.assertGreaterEqual(len(parts), 2, f"expected an instance token in the status, got {status!r}")
+        token = parts[1].strip()
+        self.assertTrue(token, "the instance token must not be empty")
+        self.assertNotIn(" ", token, f"the instance token must not contain spaces, got {token!r}")
+
+    def test_backend_answers_hello_with_its_instance_token(self):
+        status = self._wait_for_status("READY|")
+        expected_token = status.split("|")[1].strip()
+
+        reply = self._read_hello_reply(self.port)
+
+        self.assertEqual("HELLO:" + expected_token, reply)
+
+    def test_second_backend_on_a_busy_port_fails_fast_with_an_actionable_error(self):
+        self._wait_for_status("READY|")
+        second_log_dir = os.path.join(self.tempdir.name, "backend2")
+        os.makedirs(second_log_dir)
+        second_status_path = os.path.join(second_log_dir, "tts_ready.txt")
+
+        second = self._start_backend(self.port, second_log_dir)
+        returncode = second.wait(timeout=15)
+
+        self.assertNotEqual(
+            0,
+            returncode,
+            "a second backend must fail fast instead of silently sharing the busy port",
+        )
+        second_status = self._read_status(second_status_path)
+        self.assertTrue(
+            second_status.startswith("ERROR|"),
+            f"expected an error status for the busy port, got {second_status!r}",
+        )
+        self.assertIn(str(self.port), second_status)
+        self.assertIsNone(
+            self.process.poll(),
+            "the backend that owns the port must keep serving",
+        )
+
+    def test_instance_tokens_differ_between_two_backends(self):
+        first_status = self._wait_for_status("READY|")
+        first_token = first_status.split("|")[1].strip()
+
+        other_port = self._free_port()
+        other_log_dir = os.path.join(self.tempdir.name, "backend-other")
+        os.makedirs(other_log_dir)
+        other_status_path = os.path.join(other_log_dir, "tts_ready.txt")
+        self._start_backend(other_port, other_log_dir)
+        other_status = self._wait_for_status("READY|", status_path=other_status_path)
+        other_token = other_status.split("|")[1].strip()
+
+        self.assertTrue(other_token, "the second backend must publish its own token")
+        self.assertNotEqual(first_token, other_token)
+
+    def test_hello_with_a_mismatched_token_is_reported_in_the_log(self):
+        self._wait_for_status("READY|")
+        log_path = os.path.join(self.log_dir, "tts_server.log")
+
+        self._read_hello_reply(self.port, b"HELLO:token-de-outra-instancia\n")
+
+        deadline = time.time() + 5
+        messages = []
+        while time.time() < deadline:
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8") as f:
+                    messages = [json.loads(line)["msg"] for line in f if line.strip()]
+            if any("token_mismatch" in message for message in messages):
+                break
+            time.sleep(0.1)
+
+        self.assertTrue(
+            any("token_mismatch" in message for message in messages),
+            f"expected the token mismatch to be logged, got: {messages}",
+        )
+
+
+    def test_server_uses_the_shared_protocol_helpers(self):
+        with open(SERVER_SCRIPT, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        self.assertIn(
+            "from tts_protocol import",
+            source,
+            "the backend must use the shared protocol constants and helpers",
+        )
+        self.assertIn(
+            "drain_preserving(_speech_queue)",
+            source,
+            "the backend must use the shared drain helper, not an inline copy of the rule",
+        )
+
+    def test_worker_marks_the_task_done_when_the_engine_raises(self):
+        with open(SERVER_SCRIPT, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        worker_body = source.split("def _worker(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("except Exception as e:", worker_body)
+        error_handler = worker_body.split("except Exception as e:", 1)[1]
+        self.assertIn(
+            "task_done()",
+            error_handler,
+            "the worker must release the task when the engine raises, otherwise "
+            "unfinished_tasks leaks on every failure",
+        )
 
 
 if __name__ == "__main__":

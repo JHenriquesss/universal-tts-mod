@@ -38,7 +38,7 @@
 - Package/version metadata: `PACKAGE_NAME` + `RELEASE_VERSION` in `release_manifest.py`; used for default archive filename, not runtime config.
 - Final release checklist: README section tying together full suite, smoke check, manifest check, archive build, exact manifest contents, artifact exclusions.
 - Generated release artifact: `renpy-tts-mod-1.0.0.zip`; manifest-verified TTS-only zip produced in Phase 19.
-- Backend ready status: `tts_ready.txt` `READY|...`; test harness waits for it before socket connect.
+- Backend ready status: `tts_ready.txt` `READY|<instance-token>|<voices>`; test harness waits for it before socket connect. The token identifies the backend instance and is also what a client gets back from `HELLO`.
 
 ## Cross-Refs
 - Architecture: [[01-architecture.md#architecture]]

@@ -41,6 +41,22 @@ class TestChoiceHintsCore(unittest.TestCase):
         self.assertEqual("Go outside", display_choice_caption("(Charisma: 5) Go outside"))
         self.assertEqual("(Stay)", display_choice_caption("(Stay)"))
 
+    def test_lookup_choice_hint_matches_with_or_without_stripped_prefixes(self):
+        from renpy_mod.choice_hints_core import build_choice_hints, lookup_choice_hint
+
+        hints = build_choice_hints(
+            generated={
+                ("hub", "(REQ) Did you send the drones?"): "req_hint",
+                ("scene", "(Charisma: Level 3) (Flirty & cocky) Nice outfit"): "flirt_hint",
+                ("dialogue", "Plain question"): "plain_hint",
+            },
+            curated={},
+        )
+        self.assertEqual("req_hint", lookup_choice_hint(hints, "hub", "Did you send the drones?"))
+        self.assertEqual("req_hint", lookup_choice_hint(hints, "hub", "(REQ) Did you send the drones?"))
+        self.assertEqual("flirt_hint", lookup_choice_hint(hints, "scene", "Nice outfit"))
+        self.assertEqual("plain_hint", lookup_choice_hint(hints, "dialogue", "(Polite) Plain question"))
+
     def test_hint_format_colors_positive_negative_and_neutral_chunks(self):
         from renpy_mod.choice_hints_core import format_hint_for_display
 
@@ -51,12 +67,77 @@ class TestChoiceHintsCore(unittest.TestCase):
         self.assertIn("{color=#c8c8c8}Ramo Alice{/color}", formatted)
         self.assertNotIn("Requer", formatted)
 
+        no_effects = format_hint_for_display("Sem alterações")
+        self.assertEqual("{color=#c8c8c8}Sem alterações{/color}", no_effects)
+
     def test_unknown_caption_returns_none(self):
         from renpy_mod.choice_hints_core import build_choice_hints, lookup_choice_hint
 
         hints = build_choice_hints(generated={"Known": "hint"}, curated={})
 
         self.assertIsNone(lookup_choice_hint(hints, None, "Unknown"))
+
+    def test_encoding_header_declared(self):
+        core_file = os.path.join(ROOT_DIR, "renpy_mod", "choice_hints_core.py")
+        with open(core_file, "rb") as f:
+            first_line = f.readline()
+        self.assertTrue(
+            b"coding: utf-8" in first_line or b"coding=utf-8" in first_line,
+            "choice_hints_core.py must declare utf-8 encoding for Python 2.7 / Ren'Py 7 compatibility",
+        )
+
+    def test_bytes_and_unicode_handling(self):
+        from renpy_mod.choice_hints_core import (
+            build_choice_hints,
+            lookup_choice_hint,
+            normalize_caption_unicode,
+        )
+
+        # Bytes and unicode normalization
+        self.assertEqual(normalize_caption_unicode("It’s fine"), "It's fine")
+        self.assertEqual(normalize_caption_unicode(b"It\xe2\x80\x99s fine"), "It's fine")
+
+        # Lookup with byte keys and str queries
+        hints = build_choice_hints(
+            generated={(b"label_1", b"C\xc3\xa9lestin"): "celestin hint"},
+            curated={},
+        )
+        self.assertEqual(lookup_choice_hint(hints, "label_1", "Célestin"), "celestin hint")
+        self.assertEqual(lookup_choice_hint(hints, b"label_1", b"C\xc3\xa9lestin"), "celestin hint")
+
+
+
+    def test_build_additive_button_caption_preserves_native_hint_and_handles_missing_kwargs(self):
+        from renpy_mod.choice_hints_core import build_additive_button_caption
+
+        self.assertEqual(
+            build_additive_button_caption(
+                "(Charisma: 5) (REQUIRED) Help her",
+                item_kwargs={"hint": "{color=#0f0}[+1 Love]{/color}"},
+                hints_enabled=True,
+            ),
+            "Help her {color=#0f0}[+1 Love]{/color}",
+        )
+        self.assertEqual(
+            build_additive_button_caption(
+                "(REQUIRED) Help her",
+                item_kwargs={"hint": "(+1 Love)"},
+                hints_enabled=True,
+            ),
+            "Help her (+1 Love)",
+        )
+        self.assertEqual(
+            build_additive_button_caption(
+                "(REQUIRED) Help her",
+                item_kwargs={"hint": "(+1 Love)"},
+                hints_enabled=False,
+            ),
+            "Help her",
+        )
+        self.assertEqual(
+            build_additive_button_caption("Stay quiet", item_kwargs=None, hints_enabled=True),
+            "Stay quiet",
+        )
 
 
 class TestChoiceOverlayCompatibility(unittest.TestCase):
@@ -72,9 +153,14 @@ class TestChoiceOverlayCompatibility(unittest.TestCase):
             source = f.read()
 
         self.assertIn("choice_hints_core", source)
+        self.assertIn("build_additive_button_caption", source)
         self.assertNotIn("def mod_hint_chunk_color", source)
         self.assertNotIn("def mod_strip_requirement_segments", source)
+        self.assertNotIn("def _legacy_hint_chunk_color", source)
+        self.assertNotIn("def _legacy_strip_requirement_segments", source)
+        self.assertLess(len(source.splitlines()), 300, "zzz_mod_choice_consequences.rpy should stay under 300 lines")
 
 
 if __name__ == "__main__":
     unittest.main()
+

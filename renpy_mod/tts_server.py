@@ -12,7 +12,7 @@ status_path = os.path.join(log_dir, "tts_ready.txt")
 
 if os.path.exists(status_path):
     try: os.remove(status_path)
-    except: pass
+    except Exception: pass
 
 def _log(msg):
     try:
@@ -20,7 +20,7 @@ def _log(msg):
         data = {"timestamp": time.time(), "msg": msg}
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(data) + "\n")
-    except: pass
+    except Exception: pass
 
 # Redirecionamos para o log, mas MANTEMOS o console visível para o usuário
 def setup_logger():
@@ -37,12 +37,12 @@ def setup_logger():
                     try:
                         self.original_stream.write(message)
                         self.original_stream.flush()
-                    except: pass
+                    except Exception: pass
                     
         def flush(self):
             if self.original_stream:
                 try: self.original_stream.flush()
-                except: pass
+                except Exception: pass
 
     # Salva os streams originais antes de redirecionar
     orig_stdout = sys.stdout
@@ -69,7 +69,6 @@ try:
     import time
     import queue
     import threading
-    import numpy as np
     import re
 
     if here not in sys.path:
@@ -77,6 +76,16 @@ try:
 
     from text_cleaner import TextCleaner
     from tts_engines import KokoroEngine, MockEngine, get_available_voices
+    from tts_protocol import (
+        CMD_HELLO,
+        CMD_PLAYBACK_DONE,
+        CMD_QUIT,
+        CMD_SET_LANG,
+        CMD_SET_SPEED,
+        CMD_SET_VOICE,
+        CMD_STOP,
+        drain_preserving,
+    )
     
     # Agora que os imports pesados acabaram, podemos silenciar
     setup_logger()
@@ -93,6 +102,25 @@ def _normalize_lang(lang):
         "en-us": "a",
         "english": "a",
         "us": "a",
+        "en-gb": "b",
+        "uk": "b",
+        "british": "b",
+        "es": "e",
+        "spanish": "e",
+        "fr": "f",
+        "french": "f",
+        "hi": "h",
+        "hindi": "h",
+        "it": "i",
+        "italian": "i",
+        "ja": "j",
+        "jp": "j",
+        "japanese": "j",
+        "pt": "p",
+        "pt-br": "p",
+        "portuguese": "p",
+        "zh": "z",
+        "chinese": "z",
     }
     key = str(lang or "a").strip().lower()
     return aliases.get(key, key or "a")
@@ -103,6 +131,16 @@ def _make_engine(lang):
         _log("Usando engine mock para testes.")
         return MockEngine()
     return KokoroEngine(lang=lang)
+
+def _new_instance_token():
+    """Token que identifica esta instancia do backend.
+
+    Backend orfao segurando a porta 5050 e a principal causa do "jogo ficou
+    mudo": o cliente nao tem como saber com qual instancia esta falando.
+    """
+    import secrets
+    return secrets.token_hex(8)
+
 
 def _preview_text(text, limit=80):
     text = str(text).replace("\n", " ").replace("\r", " ")
@@ -123,6 +161,13 @@ def _worker(engine, initial_speed, initial_voice):
                 speed = data
             elif cmd == "SET_VOICE":
                 voice = data or voice
+            elif cmd == "SET_LANG":
+                if hasattr(engine, "set_lang"):
+                    try:
+                        engine.set_lang(data)
+                        _log(f"engine.set_lang lang={data}")
+                    except Exception as err:
+                        _log(f"engine.set_lang error={err}")
             elif cmd == "SPEAK":
                 # LIMPEZA REDUNDANTE PARA APÓSTROFOS (Prevenção Total)
                 # Mesmo que o TextCleaner falhe, limpamos aqui novamente
@@ -141,6 +186,12 @@ def _worker(engine, initial_speed, initial_voice):
             continue
         except Exception as e:
             _log(f"Erro no worker thread: {e}")
+            # A tarefa ja foi retirada da fila: sem o task_done o contador de
+            # pendencias cresce a cada falha.
+            try:
+                _speech_queue.task_done()
+            except ValueError:
+                pass
 
 def main():
     import socket
@@ -152,8 +203,34 @@ def main():
     except Exception:
         speed = 1.25
     host = '127.0.0.1'
+    config_file = os.path.join(here, "tts_config.json")
+    configured_port = None
+    if os.path.isfile(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                if "port" in cfg:
+                    configured_port = int(cfg["port"])
+        except Exception:
+            pass
+
+    cli_port = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            try:
+                cli_port = int(sys.argv[i + 1])
+            except ValueError:
+                pass
+
     try:
-        port = int(os.environ.get("TTS_PORT", "5050"))
+        if cli_port is not None:
+            port = cli_port
+        elif "TTS_PORT" in os.environ:
+            port = int(os.environ["TTS_PORT"])
+        elif configured_port is not None:
+            port = configured_port
+        else:
+            port = 5050
     except Exception:
         port = 5050
     engine_name = os.environ.get("TTS_ENGINE", "kokoro").lower()
@@ -166,8 +243,25 @@ def main():
     try:
         # Socket Server (Bind EARLY to prevent game from spawning duplicate server)
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock.bind((host, port))
+        # SO_EXCLUSIVEADDRUSE (Windows) faz o bind falhar quando a porta ja esta
+        # ocupada, em vez de dividi-la silenciosamente com outra instancia.
+        # No POSIX, SO_REUSEADDR e o equivalente correto.
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server_sock.bind((host, port))
+        except OSError as bind_error:
+            message = (
+                "porta {port} ja esta em uso por outra instancia do backend TTS. "
+                "Feche o backend anterior (ou o jogo anterior) e execute novamente."
+            ).format(port=port)
+            _log(f"bind_failed port={port} error={bind_error}")
+            print("!!! " + message)
+            with open(status_path, "w", encoding="utf-8") as f:
+                f.write("ERROR|" + message)
+            return 1
         server_sock.listen(1)
 
         engine = _make_engine(lang)
@@ -175,39 +269,37 @@ def main():
         t = threading.Thread(target=_worker, args=(engine, speed, voice), daemon=True)
         t.start()
 
-        # Handshake via arquivo (legado)
+        # Handshake via arquivo: publica o token da instancia e as vozes.
+        instance_token = _new_instance_token()
         voices_list = ",".join(get_available_voices())
         with open(status_path, "w", encoding="utf-8") as f:
-            f.write(f"READY|{voices_list}")
+            f.write(f"READY|{instance_token}|{voices_list}")
         
         _log(f"Servidor pronto.")
         print("Servidor inicializado com sucesso. Pressione Ctrl+C para encerrar.")
 
-        _response_queue = queue.Queue()
-        def on_playback_done():
-            _response_queue.put("PLAYBACK_DONE")
-        engine.on_playback_done = on_playback_done
+        active_conn = None
+        conn_lock = threading.Lock()
 
-        def _response_worker(connection):
-            while True:
-                msg = _response_queue.get()
-                if msg is None: break
-                try:
-                    connection.sendall((msg + "\n").encode('utf-8'))
-                except:
-                    break
+        def on_playback_done():
+            with conn_lock:
+                if active_conn:
+                    try:
+                        active_conn.sendall((CMD_PLAYBACK_DONE + "\n").encode("utf-8"))
+                    except Exception:
+                        pass
+        engine.on_playback_done = on_playback_done
 
         while True:
             conn, addr = server_sock.accept()
             _log(f"Conectado por {addr}")
             print(f"[*] Jogo conectado: {addr}")
-            
+
+            with conn_lock:
+                active_conn = conn
+
             with conn:
                 f = conn.makefile('r', encoding='utf-8')
-                
-                # Start response worker for this connection
-                resp_thread = threading.Thread(target=_response_worker, args=(conn,), daemon=True)
-                resp_thread.start()
 
                 try:
                     while True:
@@ -217,24 +309,44 @@ def main():
                         if not line: continue
 
 
-                        if line == "STOP":
+                        if line == CMD_STOP:
                             _log("command=STOP")
-                            while not _speech_queue.empty():
-                                try: _speech_queue.get_nowait()
-                                except: break
-                            _speech_queue.put(("STOP", None))
+                            preserved = drain_preserving(_speech_queue)
+                            try:
+                                _speech_queue.put_nowait((CMD_STOP, None))
+                            except Exception:
+                                pass
+                            for item in preserved:
+                                try:
+                                    _speech_queue.put_nowait(item)
+                                except Exception:
+                                    pass
                             continue
-                        if line == "QUIT":
+                        if line == CMD_QUIT:
                             _log("command=QUIT")
-                            _response_queue.put(None) # stop response worker
                             return
-                        if line.startswith("SET_SPEED:"):
-                            try: speed = float(line[10:].strip())
-                            except: pass
-                            _log(f"command=SET_SPEED speed={speed}")
-                            _speech_queue.put(("SET_SPEED", speed))
+                        if line.startswith(CMD_SET_SPEED + ":"):
+                            raw_speed = line[10:].strip()
+                            valid_speed = None
+                            try:
+                                parsed = float(raw_speed)
+                                import math
+                                if not math.isnan(parsed) and not math.isinf(parsed) and 0.1 <= parsed <= 5.0:
+                                    valid_speed = parsed
+                            except Exception:
+                                pass
+
+                            if valid_speed is not None:
+                                speed = valid_speed
+                                _log(f"command=SET_SPEED speed={speed}")
+                                try:
+                                    _speech_queue.put(("SET_SPEED", speed), timeout=0.5)
+                                except Exception:
+                                    pass
+                            else:
+                                _log(f"command=SET_SPEED ignored=invalid raw={raw_speed}")
                             continue
-                        if line.startswith("SET_VOICE:"):
+                        if line.startswith(CMD_SET_VOICE + ":"):
                             requested_voice = line[10:].strip()
                             if requested_voice:
                                 voice = requested_voice
@@ -243,21 +355,56 @@ def main():
                             else:
                                 _log("command=SET_VOICE ignored=empty")
                             continue
+                        if line.startswith(CMD_SET_LANG + ":"):
+                            raw_lang = line[9:].strip()
+                            normalized = _normalize_lang(raw_lang)
+                            if normalized:
+                                lang = normalized
+                                _log(f"command=SET_LANG lang={lang}")
+                                _speech_queue.put(("SET_LANG", lang))
+                            else:
+                                _log("command=SET_LANG ignored=empty")
+                            continue
+
+                        if line == CMD_HELLO or line.startswith(CMD_HELLO + ":"):
+                            # Pull, nao push: clientes que nao pedem (ponte Falcom,
+                            # plugin RPG Maker MZ) continuam sem ver linha extra.
+                            requested = line[6:].strip() if ":" in line else ""
+                            if requested and requested != instance_token:
+                                _log(f"handshake=token_mismatch requested={requested}")
+                            else:
+                                _log("handshake=ok")
+                            try:
+                                conn.sendall(("HELLO:" + instance_token + "\n").encode("utf-8"))
+                            except Exception:
+                                pass
+                            continue
 
                         cleaned_text = TextCleaner.clean(line)
                         if cleaned_text:
                             print(f"\n[TEXTO RECEBIDO] {cleaned_text}")
                             _log(f"text_preview={_preview_text(cleaned_text)}")
-                            _speech_queue.put(("SPEAK", cleaned_text))
+                            try:
+                                _speech_queue.put(("SPEAK", cleaned_text), timeout=1.0)
+                            except queue.Full:
+                                _log("speech_queue=full dropped_oldest")
+                                try:
+                                    _speech_queue.get_nowait()
+                                except Exception:
+                                    pass
+                                _speech_queue.put(("SPEAK", cleaned_text))
                         else:
                             _log("text_ignored=empty_after_cleaning")
                             print("[!] Texto vazio após limpeza (ignorado)")
                             # Immediately send PLAYBACK_DONE if we ignore
-                            _response_queue.put("PLAYBACK_DONE")
+                            on_playback_done()
                 except Exception as ex:
                     _log(f"Connection error: {ex}")
-            
-            _response_queue.put(None) # stop response worker
+                finally:
+                    with conn_lock:
+                        if active_conn is conn:
+                            active_conn = None
+
             _log("Conexão encerrada pelo cliente.")
             print("[!] Jogo desconectado. Aguardando nova conexao...")
 
@@ -266,6 +413,9 @@ def main():
         print(f"!!! ERRO CRITICO: {e}")
         with open(status_path, "w", encoding="utf-8") as f:
             f.write("ERROR|" + str(e))
+        return 1
 
 if __name__ == "__main__":
-    main()
+    # SystemExit(main()) para que o codigo de retorno reflita a falha: sem isso
+    # o backend encerrava com 0 mesmo apos um erro critico (ex.: porta ocupada).
+    raise SystemExit(main())

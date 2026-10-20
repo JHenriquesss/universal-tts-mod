@@ -59,6 +59,101 @@ class TestKokoroOnlyLightnessCleanup(unittest.TestCase):
 
         self.assertEqual([], sorted(found))
 
+    def test_tracked_files_do_not_contain_placeholder_stubs(self):
+        """Stub de LFS ou placeholder nao pode ser versionado como se fosse artefato real.
+
+        Os arquivos de tts_models/ guardavam o conteudo "Entry not found" e
+        "Not Found" no lugar dos binarios, sem nenhuma avisao.
+        """
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "-z"],
+                cwd=ROOT_DIR,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("git is not available in this environment")
+
+        stub_contents = {
+            "Entry not found",
+            "Not Found",
+            "version https://git-lfs.github.com/spec/v1",
+        }
+        offenders = []
+        for relative in result.stdout.split("\0"):
+            if not relative:
+                continue
+            path = os.path.join(ROOT_DIR, relative)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read(4096).strip()
+            except (OSError, UnicodeDecodeError):
+                continue
+            if content in stub_contents or content.startswith("version https://git-lfs"):
+                offenders.append(relative)
+
+        self.assertEqual(
+            offenders,
+            [],
+            "placeholder files must not be tracked: {}".format(offenders),
+        )
+
+    def test_tooling_scripts_do_not_carry_a_personal_home_path(self):
+        """Os scripts de tools/ sao de uso pontual e nao podem ficar presos a maquina.
+
+        Um caminho de usuario versionado deixa o script inutil para qualquer
+        outra pessoa e expõe a estrutura de pastas de quem escreveu ele.
+        """
+        import re
+
+        personal_path = re.compile(r"[A-Za-z]:\\+Users\\+", re.IGNORECASE)
+        offenders = []
+        for directory in (os.path.join(ROOT_DIR, "tools"),):
+            if not os.path.isdir(directory):
+                continue
+            for name in sorted(os.listdir(directory)):
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(directory, name)
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if personal_path.search(content):
+                    offenders.append(os.path.join("tools", name))
+
+        self.assertEqual(
+            offenders,
+            [],
+            "tooling scripts must not hardcode a personal home path: {}".format(offenders),
+        )
+
+    def test_qwen_voice_spike_stays_an_experiment(self):
+        """qwen_voice_pro/ e um experimento, nao uma dependencia do mod.
+
+        O script descreve uma voz com um modelo de 7B parametros, e o
+        resultado so serve para sistemas de clonagem que o projeto nao
+        integra. Se o experimento entrar nas dependencias, no CI ou no
+        instalador, o mod passa a carregar um peso que ninguem usa.
+        """
+        readme = read_project_file("qwen_voice_pro", "README.md").lower()
+        requirements = read_project_file("requirements.txt").lower()
+        workflow = read_project_file(".github", "workflows", "ci.yml").lower()
+        installer = read_project_file("instalar.bat").lower()
+
+        self.assertIn(
+            "spike",
+            readme,
+            "the experiment must be labelled as a spike, not as a feature",
+        )
+        for heavy_dependency in ("torch", "transformers", "accelerate", "bitsandbytes"):
+            self.assertNotIn(heavy_dependency, requirements)
+            self.assertNotIn(heavy_dependency, installer)
+        self.assertNotIn("qwen_voice_pro", workflow)
+        self.assertNotIn("qwen_voice_pro", installer)
+
     def test_docs_do_not_claim_removed_runtime_protocols(self):
         readme = read_project_file("README.md")
 

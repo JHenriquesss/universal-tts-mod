@@ -35,7 +35,7 @@ def install_selected_game(game_folder=None, askdirectory=None, showinfo=None, sh
         from tkinter import messagebox
 
         showinfo = messagebox.showinfo
-    showinfo("Instalação Concluída", message)
+    showinfo("TTS mod installed", message)
     return result
 
 

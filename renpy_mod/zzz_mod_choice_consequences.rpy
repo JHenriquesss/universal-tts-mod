@@ -1,4 +1,4 @@
-﻿# Mod: consequências de escolhas + painel de variáveis (Ren'Py)
+# Mod: consequências de escolhas + painel de variáveis (Ren'Py)
 #
 # ÂMBITO (define-scope):
 # - Com "Mod: dicas" ligado: à direita de cada botão aparece um painel com efeitos ($)
@@ -16,8 +16,11 @@ default persistent.show_choice_consequences = True
 default persistent.show_stats_overlay = False
 
 init python:
-    import re
     from choice_hints_core import (
+        HINT_GREEN as MOD_HINT_GREEN,
+        HINT_NEUTRAL as MOD_HINT_NEUTRAL,
+        HINT_RED as MOD_HINT_RED,
+        build_additive_button_caption,
         build_choice_hints,
         display_choice_caption,
         format_hint_for_display,
@@ -37,458 +40,104 @@ init python:
     CURATED_CHOICE_HINTS = {}
 
     try:
-
-
         _gen_hints = GENERATED_CHOICE_HINTS
-
-
     except Exception:
-
-
         _gen_hints = {}
-
 
     CHOICE_HINTS = build_choice_hints(_gen_hints, CURATED_CHOICE_HINTS)
 
-
-
-
-
-    def mod_choice_hints_register_unicode_aliases(store_dict):
-
-
-        extra = {}
-
-
-        for k, v in list(store_dict.items()):
-
-
-            if isinstance(k, tuple) and len(k) == 2:
-
-
-                lab, c = k
-
-
-                nc = mod_norm_caption_unicode(c)
-
-
-                if nc != c:
-
-
-                    extra[(lab, nc)] = v
-
-
-            elif isinstance(k, str):
-
-
-                nk = mod_norm_caption_unicode(k)
-
-
-                if nk != k:
-
-
-                    extra[nk] = v
-
-
-        store_dict.update(extra)
-
-
-
-
-
-    mod_choice_hints_register_unicode_aliases(CHOICE_HINTS)
-
-
-
-
-
     def mod_normalize_menu_caption(caption):
-
-
         if caption is None:
-
-
             return ""
-
-
         if isinstance(caption, str):
-
-
             return caption
-
-
         try:
-
-
             from renpy.text.text import Text
-
-
-
-
-
             if isinstance(caption, Text):
-
-
                 return str(caption)
-
-
         except Exception:
-
-
             pass
-
-
         return str(caption)
 
-
-
-
-
     def mod_choice_hints_current_label_name():
-
-
         """Nome do label (string) do script onde corre o menu. context().current é tuple na maior parte dos nós."""
-
-
         try:
-
-
             import renpy.ast as ast_mod
 
-
-
-
-
             ctx = renpy.game.context()
-
-
             for n in reversed(ctx.call_location_stack):
-
-
                 if isinstance(n, str) and renpy.game.script.has_label(n):
-
-
                     return n
 
-
             cur = ctx.current
-
-
             if isinstance(cur, str) and renpy.game.script.has_label(cur):
-
-
                 return cur
 
-
             try:
-
-
                 cur_node = renpy.game.script.lookup(cur)
-
-
             except Exception:
-
-
                 return None
-
-
-
-
 
             def block_contains_node(block, target):
-
-
                 for s in block:
-
-
                     if s is target:
-
-
                         return True
-
-
                     if isinstance(s, ast_mod.Menu):
-
-
                         for _lb, _cond, blk in s.items:
-
-
                             if blk and block_contains_node(blk, target):
-
-
                                 return True
-
-
                     elif getattr(s, "block", None):
-
-
                         if block_contains_node(s.block, target):
-
-
                             return True
-
-
                 return False
 
-
-
-
-
             for k, node in renpy.game.script.namemap.items():
-
-
                 if not isinstance(k, str) or not isinstance(node, ast_mod.Label):
-
-
                     continue
-
-
                 if block_contains_node(node.block, cur_node):
-
-
                     return k
-
-
         except Exception:
-
-
             pass
-
-
         return None
 
-
-
-
-
     def mod_consequences_lookup(caption):
-
-
-        """Resolve texto de consequÃªncias (não depende de persistent)."""
-
-
+        """Resolve texto de consequências (não depende de persistent)."""
         try:
-
-
             cap = mod_norm_caption_unicode(mod_normalize_menu_caption(caption))
-
-
             if not cap:
-
-
                 return None
-
-
             lab = mod_choice_hints_current_label_name()
             return lookup_choice_hint(CHOICE_HINTS, lab, cap)
-
-
         except Exception:
-
-
             return None
-
-
-
-
 
     def mod_consequences_get_hint(caption):
-
-
         if not persistent.show_choice_consequences:
-
-
             return None
-
-
         return mod_consequences_lookup(caption)
 
-
-
-
-
-    MOD_HINT_GREEN = "#4ade80"
-
-
-    MOD_HINT_RED = "#f87171"
-
-
-    MOD_HINT_NEUTRAL = "#c8c8c8"
-
-
-
-
-
-    def mod_choice_button_display_caption(caption):
-        """Legenda visível no botão: remove prefixos '(Charisma: ...)', '(REQUIRED)', etc.; lookup usa caption completo."""
-        return display_choice_caption(mod_normalize_menu_caption(caption))
-
-
-
-
-
-
-    def _legacy_strip_requirement_segments(s):
-
-
-        if not s:
-
-
-            return s
-
-
-        kept = []
-
-
-        for seg in s.split(";"):
-
-
-            seg = seg.strip()
-
-
-            if not seg:
-
-
-                continue
-
-
-            low = seg.lower()
-
-
-            if low.startswith("requer"):
-
-
-                continue
-
-
-            kept.append(seg)
-
-
-        return "; ".join(kept) if kept else s
-
-
-
-
-
-    def _legacy_hint_chunk_color(chunk):
-
-
-        ch = chunk.strip()
-
-
-        if not ch:
-
-
-            return MOD_HINT_NEUTRAL
-
-
-        low = ch.lower()
-
-
-        if low.startswith("ramo ") or "sem vari" in low:
-
-
-            return MOD_HINT_NEUTRAL
-
-
-        if "-=" in ch:
-
-
-            return MOD_HINT_RED
-
-
-        if "+=" in ch:
-
-
-            return MOD_HINT_GREEN
-
-
-        if re.search(r"\s-\d+", ch) and "level" not in low:
-
-
-            return MOD_HINT_RED
-
-
-        if re.search(r"\s\+\d+", ch) or re.search(r"^\+\d", ch.strip()):
-
-
-            return MOD_HINT_GREEN
-
-
-        if "poss" in low and ("mc_exp" in low or "bonus_xp" in low):
-
-
-            return MOD_HINT_GREEN
-
-
-        if "bónus" in low or "bonus" in low:
-
-
-            return MOD_HINT_GREEN
-
-
-        if re.search(r"[=\s]-\d+\s*$", ch):
-
-
-            return MOD_HINT_RED
-
-
-        if re.search(r"[=\s]\+\d+\s*$", ch):
-
-
-            return MOD_HINT_GREEN
-
-
-        return MOD_HINT_NEUTRAL
-
-
-
-
+    def mod_choice_button_display_caption(caption, item_kwargs=None, hints_enabled=False):
+        """Legenda visível no botão: remove prefixos '(Charisma: ...)', '(REQUIRED)', etc.; preserva kwargs['hint'] nativos."""
+        return build_additive_button_caption(
+            mod_normalize_menu_caption(caption),
+            item_kwargs=item_kwargs,
+            hints_enabled=hints_enabled,
+        )
 
     def mod_hint_format_for_display(raw):
-
-
         """Remove requisitos; aplica tags Ren'Py {color} verde/vermelho/neutro por fragmento."""
-
-
         return format_hint_for_display(raw)
 
-
-
-
-
     def mod_consequences_stats_lines():
-
-
         lines = []
-
-
         st = renpy.store
-
-
         for name in MOD_DEBUG_VAR_NAMES:
-
-
             if hasattr(st, name):
-
-
                 v = getattr(st, name)
-
-
                 lines.append("{} = {}".format(name, v))
-
-
         if not lines:
-
-
             lines.append("(nenhuma variável da lista ainda definida)")
-
-
         return lines
-
-
-
-
 
     if "consequences_stats_overlay" not in config.overlay_screens:
         config.overlay_screens.append("consequences_stats_overlay")
@@ -507,12 +156,12 @@ screen mod_choice_row(i):
         spacing 14
         xalign 0.5
         python:
-            _caption = i.caption
-            if getattr(persistent, "hintsEnabled", False) and "hint" in i.kwargs:
-                _caption += " " + i.kwargs["hint"]
-            
-            _mod_btn_label = mod_choice_button_display_caption(_caption)
-            
+            _mod_btn_label = mod_choice_button_display_caption(
+                i.caption,
+                item_kwargs=getattr(i, "kwargs", None),
+                hints_enabled=bool(getattr(persistent, "hintsEnabled", False)),
+            )
+
             _outlines = None
             if getattr(persistent, "dialogueTextOutlines", False):
                 _outlines = [(2, "#000000", 0, 0)]
@@ -599,5 +248,3 @@ screen mod_toolbar():
             hover_background Solid("#66666699")
             selected_background Solid("#22882299")
             padding (8, 4)
-
-

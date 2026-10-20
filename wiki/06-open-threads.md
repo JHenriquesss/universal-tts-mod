@@ -1,10 +1,12 @@
 # Open Threads
 
 ## Known Follow-Ups
-- `zzz_mod_choice_consequences.rpy` still contains Ren'Py UI and legacy wrapper functions; core logic is extracted, but file can be further trimmed later.
-- Choice screen override remains global `screen choice(items)`; compatibility risk for games with custom choice screens remains by design for now.
+- Choice screen override remains global `screen choice(items)`; native `kwargs["hint"]` and `dialogueTextOutlines` are preserved additively via `build_additive_button_caption`.
 - TTS-only release work is complete; optional choice overlay remains opt-in.
 - No active DV carry-over after Phase 21.
+- Code review 2026-10 filed as [[07-review-2026-10.md#revisão-de-código--2026-10]]: Falcom Textractor preflight (Falcom-only), socket instance-token + `SO_EXCLUSIVEADDRUSE` for backend-stability, cache pruning during session, `SET_LANG` preserved on `STOP`, and coupled wiki+test update to stop the doc drift.
+- P0 (Falcom Textractor preflight), P1 (backend instance token + fail-fast port binding + cache pruning during the session), the whole P2 group (shared protocol module, `SET_LANG` preserved on `STOP`, `task_done` on the error path, `MODEL_VERSION` in the cache key, wiki+test coupling with code-derived guards, placeholder files removed) and the P3 group (reproducible Unity build with a working drift guard, nested RPG Maker MZ detection, personal paths removed from the tooling) were implemented on 2026-10-19. The P4 items of the review remain open.
+- The wiki/test drift is no longer pinned by a stale test: `tests/test_wiki_state.py` now derives its expectations from the code (supported engines, protocol commands and the real trunk count), and the wiki pages and their assertions move together.
 
 ## Closed Bugs/Risks
 - Init-phase `renpy.notify` crash risk mitigated by deferred start callback and safe notify helper.
@@ -20,7 +22,10 @@
 - Release process omission risk reduced by final README checklist.
 - Socket test flakiness reduced by ready-file polling, richer setup diagnostics, and repeated focused test evidence.
 - Release artifact existence/contents verified by generated `renpy-tts-mod-1.0.0.zip` matching manifest exactly.
+- Dead `_legacy_*` functions in `zzz_mod_choice_consequences.rpy` removed (reduced to <250 lines) and additive native hint preservation hardened via `build_additive_button_caption`.
+- Monolithic `falcom_text_hook.py` decomposed into `falcom_text_hook.py` (<500 lines) and `falcom_win32_runtime.py` (<500 lines), with `falcom_voice_map.py` and `falcom_win32_runtime.py` included in `install_tts_mod.py`.
 
 ## Cross-Refs
 - Phases: [[03-phases.md#phases]]
 - Decisions: [[04-decisions.md#decisions]]
+- Session log: [[08-session-log.md#session-log]]
