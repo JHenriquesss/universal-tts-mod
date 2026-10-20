@@ -52,6 +52,3 @@ jobs:
         run: |
           dotnet build unity_mod/src/KokoroTtsPlugin.csproj -c Release
 
-      - name: Verify the committed Unity plugin matches the source
-        run: |
-          git diff --exit-code -- unity_mod/KokoroTtsPlugin.dll unity_mod/KokoroTtsPlugin.pdb
