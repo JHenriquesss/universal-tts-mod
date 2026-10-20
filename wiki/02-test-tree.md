@@ -2,14 +2,19 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 327 tests in 6.4s OK` (2026-10-19, after the P3 Unity plugin block).
+- Latest evidence: `Ran 327 tests in 9.2s OK` (2026-10-19, after the P4 TextCleaner block).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
+- The recorded count is the count of the **committed** trunk: copy it from the output of
+  the run itself, never add up the new tests by hand. The count was overstated by
+  arithmetic between the P2 and P3 blocks and the guard was red the whole time.
+- The guard compares against the working tree, so uncommitted tests make it fail locally
+  until they are committed together with the new count.
 
 ## Branches
 | Branch | File | Asserts |
 |---|---|---|
-| Text cleaner | `tests/test_cleaner.py` | Ren'Py tag removal, escapes, whitespace, punctuation, slang/apostrophes, mojibake, default/custom pronunciation overrides, hot-path guard. |
+| Text cleaner | `tests/test_cleaner.py` | Ren'Py tag removal, escapes, whitespace, punctuation, slang/apostrophes, mojibake (including the truncated `â€` that must not become an ellipsis), gerunds with the dropped `g` (`thinkin'` -> `thinking`, `ain'`/`notin'` left alone), Falcom tags that must not eat a `#` inside a word, default/custom pronunciation overrides, hot-path guard. |
 | Falcom text cleaner | `tests/test_falcom_cleaner.py` | Falcom-specific portrait tags and pronunciation overrides. |
 | Socket protocol | `tests/test_server.py` | Mock backend starts on isolated port; accepts `SET_SPEED`, `SET_VOICE`, `SET_LANG`, `STOP`, `HELLO`, text, `QUIT`; ignores empty cleaned text; no real Kokoro/audio dependency. |
 | Backend instance identity | `tests/test_server.py` | Token published per instance, `HELLO` handshake, busy port fails fast with an actionable error, tokens differ between backends, token mismatch is logged. |

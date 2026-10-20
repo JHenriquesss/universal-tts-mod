@@ -120,6 +120,28 @@ class TestTextCleaner(unittest.TestCase):
         # Dashes
         self.assertEqual(TextCleaner.clean("Wordâ€”word"), "Word word") # Em-dash becomes space in step 6
 
+    def test_dropped_g_gerunds_use_the_ing_form(self):
+        self.assertEqual(TextCleaner.clean("I bein' tired"), "I being tired")
+        self.assertEqual(TextCleaner.clean("I thinkin' about it"), "I thinking about it")
+        self.assertEqual(TextCleaner.clean("Brooklyn Comin' right up!"), "Brooklyn Coming right up!")
+        # O "t" cai junto com o "g": "writin'" -> "writing".
+        self.assertEqual(TextCleaner.clean("I'm writin' a letter"), "I'm writing a letter")
+
+    def test_words_merely_ending_in_in_are_not_turned_into_gerunds(self):
+        cleaned = TextCleaner.clean("That's the ain' dog")
+
+        self.assertNotIn("aing", cleaned)
+        # "not in" nao e gerundio: casar qualquer terminacao "in" viraria "noting".
+        self.assertNotIn("noting", TextCleaner.clean("I'm notin' sure"))
+
+    def test_hash_inside_a_word_is_not_treated_as_a_falcom_tag(self):
+        self.assertIn("C#Sharp", TextCleaner.clean("Write C#Sharp code"))
+
+    def test_partial_mojibake_does_not_become_an_ellipsis(self):
+        cleaned = TextCleaner.clean("aâ€x b")
+
+        self.assertNotIn("...", cleaned)
+
     def test_default_pronunciation_overrides(self):
         self.assertEqual(TextCleaner.clean("Nadia saw Dezno."), "Nah-dee-ah saw Dez-no.")
         self.assertEqual(TextCleaner.clean("Nahdia met Ellie."), "Nah-dee-ah met El-lee.")
