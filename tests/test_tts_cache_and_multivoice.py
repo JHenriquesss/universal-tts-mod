@@ -112,6 +112,54 @@ class TestTtsCacheAndMultiVoice(unittest.TestCase):
             finally:
                 KokoroEngine.__init__ = original_init
 
+    def test_cache_key_changes_when_the_synthesis_model_changes(self):
+        import tempfile
+        import tts_engines
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            original_init = KokoroEngine.__init__
+            KokoroEngine.__init__ = lambda self: setattr(self, 'cache_dir', tmp_dir) or None
+            try:
+                engine = KokoroEngine()
+                key = engine._get_cache_key("Testing dialogue cache.", voice="af_heart", speed=1.0)
+
+                original_version = tts_engines.MODEL_VERSION
+                tts_engines.MODEL_VERSION = original_version + "-model-bump"
+                try:
+                    bumped_key = engine._get_cache_key("Testing dialogue cache.", voice="af_heart", speed=1.0)
+                finally:
+                    tts_engines.MODEL_VERSION = original_version
+            finally:
+                KokoroEngine.__init__ = original_init
+
+            self.assertNotEqual(
+                key,
+                bumped_key,
+                "the cache key must change when the synthesis model changes, "
+                "otherwise stale audio keeps being served after a model upgrade",
+            )
+
+    def test_cache_is_pruned_during_the_session_not_only_at_startup(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            original_init = KokoroEngine.__init__
+            KokoroEngine.__init__ = lambda self: setattr(self, 'cache_dir', tmp_dir) or None
+            try:
+                engine = KokoroEngine()
+                prunes = []
+                engine.clean_cache = lambda *args, **kwargs: prunes.append(True) or 0
+
+                engine._save_to_cache(
+                    "key_0",
+                    np.array([0.1, 0.2], dtype=np.float32),
+                )
+            finally:
+                KokoroEngine.__init__ = original_init
+
+            self.assertTrue(
+                prunes,
+                "the cache must be pruned while the session runs, not only when the backend starts",
+            )
+
     def test_get_tts_engine_factory_function(self):
         import tts_engines
         self.assertTrue(callable(tts_engines.get_tts_engine))

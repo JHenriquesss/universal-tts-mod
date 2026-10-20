@@ -11,6 +11,10 @@ DEFAULT_VOICE_MAP = {
 }
 DEFAULT_KOKORO_VOICE = "af_heart"
 
+# Versao do modelo de sintese. Entra na chave do cache em disco: sem isso, uma
+# troca de modelo continuaria servindo o audio antigo sem nenhum aviso.
+MODEL_VERSION = "kokoro-v0.19"
+
 def get_available_voices():
     return list(DEFAULT_VOICE_MAP.keys())
 
@@ -248,7 +252,7 @@ class KokoroEngine(TTSEngine):
     def _get_cache_key(self, text, voice=None, speed=1.0):
         import hashlib
         actual_voice = voice if voice and voice != "None" else DEFAULT_KOKORO_VOICE
-        return hashlib.md5(f"{actual_voice}_{speed:.2f}_{text}".encode("utf-8")).hexdigest()
+        return hashlib.md5(f"{MODEL_VERSION}_{actual_voice}_{speed:.2f}_{text}".encode("utf-8")).hexdigest()
 
     def _get_from_cache(self, cache_key):
         cache_file = os.path.join(self.cache_dir, f"{cache_key}.npy")
@@ -269,6 +273,11 @@ class KokoroEngine(TTSEngine):
             np.save(cache_file, audio_data)
         except Exception as ex:
             _log_engine(f"Erro ao salvar cache: {ex}")
+            return
+        # Poda durante a sessao: a cota so era reavaliada no boot, e uma sessao longa
+        # ultrapassava o limite de arquivos e de tamanho sem parar. A varredura do
+        # diretorio e barata ao lado do custo de sintetizar a fala.
+        self.clean_cache()
 
     def speak(self, text, voice=None, speed=1.0):
         if not self.pipeline:
