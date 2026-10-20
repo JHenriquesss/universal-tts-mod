@@ -447,17 +447,35 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
         return process
 
     def _terminate(self, process):
-        if process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        if process.poll() is None:
+            process.terminate()
             try:
-                process.wait(timeout=2)
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                pass
+                process.kill()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+        # Fechar os pipes do subprocess: sem isso o GC emite ResourceWarning
+        # de arquivo nao fechado ao fim da execucao.
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+    def _read_hello_reply(self, port, request=b"HELLO\n"):
+        """Conecta, envia o pedido e devolve a primeira linha, fechando tudo."""
+        with socket.create_connection((HOST, port), timeout=2.0) as sock:
+            sock.settimeout(3.0)
+            sock.sendall(request)
+            reader = sock.makefile("r", encoding="utf-8")
+            try:
+                return reader.readline().strip()
+            finally:
+                reader.close()
 
     def _read_status(self, status_path=None):
         path = status_path or self.status_path
@@ -489,11 +507,7 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
         status = self._wait_for_status("READY|")
         expected_token = status.split("|")[1].strip()
 
-        with socket.create_connection((HOST, self.port), timeout=2.0) as sock:
-            sock.settimeout(3.0)
-            sock.sendall(b"HELLO\n")
-            reader = sock.makefile("r", encoding="utf-8")
-            reply = reader.readline().strip()
+        reply = self._read_hello_reply(self.port)
 
         self.assertEqual("HELLO:" + expected_token, reply)
 
@@ -541,11 +555,7 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
         self._wait_for_status("READY|")
         log_path = os.path.join(self.log_dir, "tts_server.log")
 
-        with socket.create_connection((HOST, self.port), timeout=2.0) as sock:
-            sock.settimeout(3.0)
-            sock.sendall(b"HELLO:token-de-outra-instancia\n")
-            reader = sock.makefile("r", encoding="utf-8")
-            reader.readline()
+        self._read_hello_reply(self.port, b"HELLO:token-de-outra-instancia\n")
 
         deadline = time.time() + 5
         messages = []
