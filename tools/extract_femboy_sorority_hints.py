@@ -6,7 +6,14 @@ import os
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-rpa_path = r'D:\Games\FemboySorority-0.4-Public-pc\FemboySorority-0.4-pc\game\archive.rpa'
+# Caminhos do jogo e do arquivo gerado: argumentos da linha de comando.
+# Uso: python tools/extract_femboy_sorority_hints.py <archive.rpa> <saida.rpy>
+if len(sys.argv) < 3:
+    print("Uso: python tools/extract_femboy_sorority_hints.py <archive.rpa> <saida.rpy>")
+    sys.exit(1)
+
+rpa_path = sys.argv[1]
+output_path = sys.argv[2]
 
 with open(rpa_path, 'rb') as f:
     header = f.read(40)
@@ -108,7 +115,6 @@ for (lbl, cap), eff in sorted(hints.items()):
     print(f"  ('{lbl}', '{cap}') -> '{eff}'")
 output_lines.append("    }\n")
 
-output_path = os.path.join(r"C:\Users\joseh_fguhny9\OneDrive\Área de Trabalho\Nova pasta (4)\tts renply\samples", "femboy_sorority_choice_hints_generated.rpy")
 with open(output_path, "w", encoding="utf-8") as out:
     out.write("\n".join(output_lines))
 print(f"Saved to {output_path}")

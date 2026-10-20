@@ -102,6 +102,34 @@ class TestKokoroOnlyLightnessCleanup(unittest.TestCase):
             "placeholder files must not be tracked: {}".format(offenders),
         )
 
+    def test_tooling_scripts_do_not_carry_a_personal_home_path(self):
+        """Os scripts de tools/ sao de uso pontual e nao podem ficar presos a maquina.
+
+        Um caminho de usuario versionado deixa o script inutil para qualquer
+        outra pessoa e expõe a estrutura de pastas de quem escreveu ele.
+        """
+        import re
+
+        personal_path = re.compile(r"[A-Za-z]:\\+Users\\+", re.IGNORECASE)
+        offenders = []
+        for directory in (os.path.join(ROOT_DIR, "tools"),):
+            if not os.path.isdir(directory):
+                continue
+            for name in sorted(os.listdir(directory)):
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(directory, name)
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if personal_path.search(content):
+                    offenders.append(os.path.join("tools", name))
+
+        self.assertEqual(
+            offenders,
+            [],
+            "tooling scripts must not hardcode a personal home path: {}".format(offenders),
+        )
+
     def test_docs_do_not_claim_removed_runtime_protocols(self):
         readme = read_project_file("README.md")
 

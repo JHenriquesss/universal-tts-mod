@@ -5,7 +5,11 @@ import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-game_dir = r"C:\Users\joseh_fguhny9\OneDrive\Área de Trabalho\Nova pasta (4)\tts renply\Jogo atual\Cockham-v0.8.1-pc\Cockham-v0.8.1-pc\game"
+# Caminho do jogo: argumento da linha de comando, com o caminho relativo
+# padrao das pastas de jogo versionadas no repositorio.
+game_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+    "Jogo atual", "Cockham-v0.8.1-pc", "Cockham-v0.8.1-pc", "game"
+)
 rpy_files = glob.glob(os.path.join(game_dir, "*.rpy"))
 
 characters = {}
