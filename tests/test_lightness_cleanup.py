@@ -130,6 +130,30 @@ class TestKokoroOnlyLightnessCleanup(unittest.TestCase):
             "tooling scripts must not hardcode a personal home path: {}".format(offenders),
         )
 
+    def test_qwen_voice_spike_stays_an_experiment(self):
+        """qwen_voice_pro/ e um experimento, nao uma dependencia do mod.
+
+        O script descreve uma voz com um modelo de 7B parametros, e o
+        resultado so serve para sistemas de clonagem que o projeto nao
+        integra. Se o experimento entrar nas dependencias, no CI ou no
+        instalador, o mod passa a carregar um peso que ninguem usa.
+        """
+        readme = read_project_file("qwen_voice_pro", "README.md").lower()
+        requirements = read_project_file("requirements.txt").lower()
+        workflow = read_project_file(".github", "workflows", "ci.yml").lower()
+        installer = read_project_file("instalar.bat").lower()
+
+        self.assertIn(
+            "spike",
+            readme,
+            "the experiment must be labelled as a spike, not as a feature",
+        )
+        for heavy_dependency in ("torch", "transformers", "accelerate", "bitsandbytes"):
+            self.assertNotIn(heavy_dependency, requirements)
+            self.assertNotIn(heavy_dependency, installer)
+        self.assertNotIn("qwen_voice_pro", workflow)
+        self.assertNotIn("qwen_voice_pro", installer)
+
     def test_docs_do_not_claim_removed_runtime_protocols(self):
         readme = read_project_file("README.md")
 

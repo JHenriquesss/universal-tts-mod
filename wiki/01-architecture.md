@@ -35,6 +35,7 @@
 - Choice overlay files only if using choice-hint feature: `choice_hints_core.py`, `zzz_mod_choice_consequences.rpy`, generated hints.
 - Tests enforce no `renpy_mod/__pycache__`, `*.pyc`, `*.log`, or `tts_ready.txt` artifacts.
 - Requirements/install path: Kokoro, sounddevice, soundfile, numpy. Edge/Sherpa/cache paths removed.
+- `qwen_voice_pro/` is a spike with no consumer: a 7B model that describes a voice for cloning systems the project does not integrate. It is not installed, not in the project requirements and not in the CI, and a guard keeps it that way.
 
 ## Configuration
 - `TTS_ENGINE = "kokoro"`; tests set `TTS_ENGINE=mock`.

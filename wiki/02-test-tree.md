@@ -2,7 +2,7 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 327 tests in 9.2s OK` (2026-10-19, after the P4 TextCleaner block).
+- Latest evidence: `Ran 328 tests in 9.2s OK` (2026-10-19, after the P4 TextCleaner block).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
 - The recorded count is the count of the **committed** trunk: copy it from the output of
@@ -22,7 +22,7 @@
 | Ren'Py startup/lifecycle | `tests/test_renpy_startup.py` | Auto-connect deferred; safe notify helper; `tts_kill()` sends `QUIT`, closes socket, waits/escalates process; bad socket reference cleared; instance token captured and mismatched instance rejected. |
 | Auto-advance | `tests/test_auto_advance.py` | Auto-forward on playback end, user interaction resets, no afm callback blocking. |
 | Cache and multi-voice | `tests/test_tts_cache_and_multivoice.py` | Cache key and storage, cache pruning during the session, model version in the cache key, Falcom portrait voice map, single `stop()` and queue drain. |
-| Lightness/package | `tests/test_lightness_cleanup.py` | No unsupported Edge/Sherpa deps/classes/docs; mock only via env; no deploy artifacts under `renpy_mod`. |
+| Lightness/package | `tests/test_lightness_cleanup.py` | No unsupported Edge/Sherpa deps/classes/docs; mock only via env; no deploy artifacts under `renpy_mod`; `qwen_voice_pro` kept as a labelled spike out of the requirements, the installer and the CI. |
 | Choice hints core | `tests/test_choice_hints_core.py` | Curated overrides generated; Unicode aliasing; label-scoped lookup; display caption stripping; hint color formatting; public Ren'Py screen names preserved. |
 | Extractor CLI | `tests/test_extract_menu_hints.py` | Byte fixture extraction, generated output shape, CLI path resolution, nested menus, no personal hardcoded paths. |
 | Installer | `tests/test_install_tts_mod.py` | Nested Ren'Py root detection; TTS-only copy plan; artifact/choice-overlay exclusion; dry-run does not write. |
