@@ -67,6 +67,9 @@ class TestChoiceHintsCore(unittest.TestCase):
         self.assertIn("{color=#c8c8c8}Ramo Alice{/color}", formatted)
         self.assertNotIn("Requer", formatted)
 
+        no_effects = format_hint_for_display("Sem alterações")
+        self.assertEqual("{color=#c8c8c8}Sem alterações{/color}", no_effects)
+
     def test_unknown_caption_returns_none(self):
         from renpy_mod.choice_hints_core import build_choice_hints, lookup_choice_hint
 

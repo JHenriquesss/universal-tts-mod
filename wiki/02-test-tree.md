@@ -2,7 +2,7 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 368 tests in 8.9s OK` (2026-10-19, after the P4 client split block).
+- Latest evidence: `Ran 370 tests in 8.8s OK` (2026-10-19, after the choice hints unwinding and fallback block).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
 - The recorded count is the count of the **committed** trunk: copy it from the output of

@@ -93,6 +93,41 @@ label convo:
         self.assertIn("Victoria_Lust += 2", hints[("convo", "Flirt with her")])
         self.assertIn("MC_EXP += 50", hints[("convo", "Flirt with her")])
 
+    def test_nested_menu_allows_subsequent_outer_choices(self):
+        from extract_menu_hints_generic import extract_choice_hints
+
+        data = b'''
+label hub:
+    menu:
+        "Choice A":
+            $ a = 1
+            menu:
+                "Inner Choice":
+                    $ inner = 10
+        "Choice B":
+            $ b = 2
+'''
+        hints = extract_choice_hints(data)
+        self.assertIn(("hub", "Choice A"), hints)
+        self.assertEqual("a = 1", hints[("hub", "Choice A")])
+        self.assertIn(("hub", "Inner Choice"), hints)
+        self.assertEqual("inner = 10", hints[("hub", "Inner Choice")])
+        self.assertIn(("hub", "Choice B"), hints)
+        self.assertEqual("b = 2", hints[("hub", "Choice B")])
+
+    def test_choice_without_variable_effects_records_sem_alteracoes(self):
+        from extract_menu_hints_generic import extract_choice_hints
+
+        data = b'''
+label hub:
+    menu:
+        "Just talk":
+            "Some dialogue line"
+'''
+        hints = extract_choice_hints(data)
+        self.assertIn(("hub", "Just talk"), hints)
+        self.assertEqual("Sem alterações", hints[("hub", "Just talk")])
+
     def test_render_generated_hints_output_shape(self):
         from extract_menu_hints_generic import render_generated_hints
 

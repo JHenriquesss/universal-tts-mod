@@ -200,7 +200,12 @@ def _hint_chunk_color(chunk):
         return HINT_NEUTRAL
 
     lowered = text.lower()
-    if lowered.startswith("ramo ") or "sem vari" in lowered:
+    if (
+        lowered.startswith("ramo ")
+        or "sem vari" in lowered
+        or "sem alter" in lowered
+        or "sem efeito" in lowered
+    ):
         return HINT_NEUTRAL
     if "-=" in text:
         return HINT_RED

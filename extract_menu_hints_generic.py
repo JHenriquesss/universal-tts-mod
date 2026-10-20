@@ -63,15 +63,14 @@ def extract_choice_hints(data):
             i += 1
             continue
 
-        if _has_enclosing_menu(stack, indent):
-            choice_info = _match_choice_header(lines, i)
-            if choice_info:
-                c_indent, caption, end_hdr_idx = choice_info
-                _unwind_choices_to_indent(stack, c_indent, hints)
-                caption = caption.replace('\\"', '"').replace("\\'", "'")
-                stack.append(("choice", c_indent, current_label, caption, []))
-                i = end_hdr_idx + 1
-                continue
+        choice_info = _match_choice_header(lines, i)
+        if choice_info and _has_enclosing_menu(stack, choice_info[0]):
+            c_indent, caption, end_hdr_idx = choice_info
+            _unwind_stack_to_indent(stack, c_indent, hints)
+            caption = caption.replace('\\"', '"').replace("\\'", "'")
+            stack.append(("choice", c_indent, current_label, caption, []))
+            i = end_hdr_idx + 1
+            continue
 
         _unwind_stack_to_indent(stack, indent, hints)
         if stack and stack[-1][0] == "choice":
@@ -83,9 +82,9 @@ def extract_choice_hints(data):
 
 
 def _has_enclosing_menu(stack, indent):
-    for item in reversed(stack):
-        if item[0] == "menu":
-            return indent > item[1]
+    for item in stack:
+        if item[0] == "menu" and item[1] < indent:
+            return True
     return False
 
 
@@ -133,8 +132,9 @@ def _unwind_choices_to_indent(stack, indent, hints):
 def _record_choice_effects(choice_item, hints):
     _, _, label, caption, branch_lines = choice_item
     effects = _extract_effects_from_lines(branch_lines)
-    if effects:
-        _merge_hint(hints, (label, caption), effects)
+    if not effects:
+        effects = ["Sem alterações"]
+    _merge_hint(hints, (label, caption), effects)
 
 
 def _extract_effects_from_lines(branch_lines):
@@ -173,11 +173,14 @@ def _merge_hint(hints, key, effects):
         hints[key] = "; ".join(effects)
         return
 
-    existing = hints[key].split("; ")
+    existing = [e for e in hints[key].split("; ") if e and e != "Sem alterações"]
     for effect in effects:
-        if effect not in existing:
+        if effect != "Sem alterações" and effect not in existing:
             existing.append(effect)
-    hints[key] = "; ".join(existing)
+    if not existing:
+        hints[key] = "Sem alterações"
+    else:
+        hints[key] = "; ".join(existing)
 
 
 def render_generated_hints(hints):
@@ -224,7 +227,8 @@ def extract_from_directory(game_dir):
                 try:
                     with open(file_path, "rb") as f:
                         file_hints = extract_choice_hints(f.read())
-                    hints.update(file_hints)
+                    for key, effect_str in file_hints.items():
+                        _merge_hint(hints, key, effect_str.split("; "))
                 except Exception:
                     continue
     return hints
@@ -240,7 +244,10 @@ def run_extraction(target_path, output_path, prior_hints_path=None):
     if prior_hints_path:
         prior = load_prior_hints(prior_hints_path)
         merged = dict(prior)
-        merged.update(hints)
+        for key, val in hints.items():
+            if val == "Sem alterações" and key in merged and merged[key] != "Sem alterações":
+                continue
+            merged[key] = val
         hints = merged
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
