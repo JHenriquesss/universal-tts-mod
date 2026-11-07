@@ -43,12 +43,24 @@ def _read_log_messages(log_path):
     if not os.path.isfile(log_path):
         return []
     messages = []
-    with open(log_path, "r", encoding="utf-8") as handle:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            line = line.strip()
-            if line:
+            # O backend pode estar no meio de uma escrita: no Windows a ultima
+            # linha aparece com bytes nulos antes do texto chegar.
+            line = line.strip().strip("\x00")
+            if not line:
+                continue
+            try:
                 messages.append(json.loads(line).get("msg", ""))
+            except ValueError:
+                continue
     return messages
+
+
+def _assert_clean_exit(test, proc, returncode):
+    if returncode != 0:
+        _stdout, stderr = proc.communicate(timeout=2)
+        test.fail(f"backend exited with {returncode:#x}\nstderr:\n{stderr}")
 
 
 def _extract_init_999_python():
@@ -126,7 +138,7 @@ class HibernationProtocolAndLauncherTest(unittest.TestCase):
                 self.assertTrue(reply.startswith("HELLO:"))
 
                 returncode = proc.wait(timeout=3.0)
-                self.assertEqual(returncode, 0)
+                _assert_clean_exit(self, proc, returncode)
                 self.assertFalse(os.path.exists(status_path))
                 logs = _read_log_messages(log_path)
                 self.assertTrue(any("idle_hibernate" in msg for msg in logs), logs)
@@ -172,7 +184,7 @@ class HibernationProtocolAndLauncherTest(unittest.TestCase):
                     self.assertTrue(reply.startswith("HELLO:"))
 
                 returncode = proc.wait(timeout=5.0)
-                self.assertEqual(returncode, 0)
+                _assert_clean_exit(self, proc, returncode)
                 self.assertFalse(os.path.exists(status_path))
                 logs = _read_log_messages(log_path)
                 self.assertIn("idle_timeout=0.0", "\n".join(logs))

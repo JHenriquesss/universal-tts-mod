@@ -589,3 +589,7 @@ class MockEngine(TTSEngine):
         self.lang = lang
         _log_engine(f"MockEngine lang set to {lang}")
         return True
+
+    def stop(self):
+        # Sem audio real: nao carrega o PortAudio so para parar o nada.
+        pass

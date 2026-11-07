@@ -13,6 +13,25 @@ SERVER_SCRIPT = os.path.join(ROOT_DIR, "renpy_mod", "tts_server.py")
 HOST = "127.0.0.1"
 
 
+def _read_log_file(log_path):
+    """Mensagens do log JSON do backend, ignorando a linha que ainda esta sendo escrita.
+
+    O backend grava enquanto o teste le: no Windows o leitor pode ver o arquivo ja
+    estendido com bytes nulos antes do texto da ultima linha chegar.
+    """
+    messages = []
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip().strip("\x00")
+            if not line:
+                continue
+            try:
+                messages.append(json.loads(line)["msg"])
+            except (ValueError, KeyError, TypeError):
+                continue
+    return messages
+
+
 class TestTTSServerSocketProtocol(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -139,8 +158,7 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
     def _read_log_messages(self):
         if not os.path.exists(self.log_path):
             return []
-        with open(self.log_path, "r", encoding="utf-8") as f:
-            return [json.loads(line)["msg"] for line in f if line.strip()]
+        return _read_log_file(self.log_path)
 
     def _wait_for_log_message(self, predicate):
         deadline = time.time() + 5
@@ -562,8 +580,7 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
         messages = []
         while time.time() < deadline:
             if os.path.exists(log_path):
-                with open(log_path, "r", encoding="utf-8") as f:
-                    messages = [json.loads(line)["msg"] for line in f if line.strip()]
+                messages = _read_log_file(log_path)
             if any("token_mismatch" in message for message in messages):
                 break
             time.sleep(0.1)

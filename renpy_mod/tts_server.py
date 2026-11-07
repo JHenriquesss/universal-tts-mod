@@ -300,15 +300,34 @@ def main():
         active_conn = None
         conn_lock = threading.Lock()
         shutdown_event = threading.Event()
+        # Fim do _trigger_shutdown. Quando outra thread (ociosidade, pai encerrado)
+        # dispara o desligamento, o main espera por ele antes de retornar: sair
+        # com essa thread ainda em codigo nativo (engine.stop -> PortAudio)
+        # derrubava o processo com 0xC0000005 na finalizacao do Python.
+        shutdown_done = threading.Event()
+
+        def _wait_shutdown_finished():
+            shutdown_done.wait(timeout=5.0)
 
         def _trigger_shutdown(reason):
             if shutdown_event.is_set():
                 return
+            try:
+                _shutdown_steps(reason)
+            finally:
+                shutdown_done.set()
+
+        def _shutdown_steps(reason):
             _log(reason)
             shutdown_event.set()
             remove_owned_status(status_path, instance_token)
             try:
                 engine.stop()
+            except Exception:
+                pass
+            # Acorda o worker para ele sair antes da finalizacao do interpretador.
+            try:
+                _speech_queue.put_nowait(None)
             except Exception:
                 pass
             with conn_lock:
@@ -367,6 +386,7 @@ def main():
                 conn, addr = server_sock.accept()
             except OSError:
                 if shutdown_event.is_set():
+                    _wait_shutdown_finished()
                     return 0
                 raise
             _touch_activity()
@@ -482,6 +502,7 @@ def main():
                     return 0
                 _log("Conexão encerrada pelo cliente.")
                 print("[!] Jogo desconectado. Aguardando nova conexao...")
+        _wait_shutdown_finished()
         return 0
 
     except Exception as e:
