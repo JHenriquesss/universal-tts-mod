@@ -3,9 +3,10 @@
 ################################################################################
 
 # Usamos init 999 para garantir que o GUI do jogo já terminou de carregar
-init 999 python: 
-    import subprocess
+init 999 python:
+    import atexit
     import os
+    import subprocess
     import sys
     import threading
     import time
@@ -17,45 +18,23 @@ init 999 python:
     if _tts_client_dir and _tts_client_dir not in sys.path:
         sys.path.insert(0, _tts_client_dir)
 
-    from tts_client_state import TTSState
-    from tts_client_voice import (
-        BF_NAME_KEYS,
-        PLAYER_NAME_KEYS,
-        clean_speaker_name,
-        collect_context_names,
-        resolve_voice,
-    )
-    from tts_client_hooks import (
-        extract_callback_text,
-        install_display_hook,
-        install_phone_callback_wrappers,
-        install_save_compat_hook,
-    )
+    from tts_client_state import TTSState, find_backend_python
+    from tts_client_voice import BF_NAME_KEYS, PLAYER_NAME_KEYS, clean_speaker_name, collect_context_names, resolve_voice
+    from tts_client_hooks import extract_callback_text, install_display_hook, install_phone_callback_wrappers, install_save_compat_hook
     from tts_client_auto import AutoAdvanceController
     from tts_client_speech import speak
-    from tts_client_commands import (
-        decrease_speed,
-        increase_speed,
-        send_speed,
-        toggle_audio,
-        toggle_auto,
-    )
+    from tts_client_commands import decrease_speed, increase_speed, send_speed, toggle_audio, toggle_auto
 
-    # --- CONFIGURAÇÕES ---
-    TTS_ENGINE = "kokoro"   
-    TTS_LANG = "a"        
+    TTS_ENGINE = "kokoro"
+    TTS_LANG = "a"
     TTS_VOICE = "af_heart"
     TTS_PORT = 5050
-    # -------------------
 
     tts_state = TTSState(persistent=persistent, default_voice=TTS_VOICE, config=renpy.config)
+    _tts_connect_lock = threading.Lock()
 
     def _tts_backend_instance_token():
-        """Le o token de instancia publicado pelo backend no arquivo de prontidao.
-
-        Retorna None quando nao ha token publicado (ex.: backend iniciado
-        manualmente em outro diretorio), caso em que nao existe nada a comparar.
-        """
+        """Le o token de instancia publicado pelo backend no arquivo de prontidao."""
         try:
             status_path = os.path.join(renpy.config.gamedir, "tts_ready.txt")
             if not os.path.exists(status_path):
@@ -65,10 +44,7 @@ init 999 python:
             if not status.startswith("READY|"):
                 return None
             parts = status.split("|")
-            if len(parts) < 2:
-                return None
-            token = parts[1].strip()
-            return token or None
+            return (parts[1].strip() or None) if len(parts) >= 2 else None
         except Exception:
             return None
 
@@ -81,6 +57,12 @@ init 999 python:
             pass
         return expected_token
 
+    def _tts_flush_pending_speech():
+        pending = getattr(tts_state, "pending_speech", None)
+        if pending and tts_state.sock and getattr(tts_state, "tts_audio_enabled", True):
+            tts_state.pending_speech = None
+            speak(tts_state, pending[0], pending[1], TTS_VOICE, renpy.substitute, tts_notify)
+
     def _tts_socket_listener(sock):
         try:
             f = sock.makefile('r')
@@ -88,15 +70,14 @@ init 999 python:
             while tts_state.listening:
                 line = f.readline()
                 if not line:
-                    tts_notify("TTS: Conexão encerrada pelo servidor.")
+                    if tts_state.listening and getattr(tts_state, "tts_audio_enabled", True):
+                        tts_notify("TTS: Conexão encerrada pelo servidor.")
                     break
                 line = line.strip()
                 if line.startswith("HELLO:"):
                     remote_token = line[6:].strip()
                     tts_state.backend_token = remote_token
                     if expected_token and remote_token and remote_token != expected_token:
-                        # Outra instancia do backend esta respondendo: e o backend
-                        # orfao segurando a porta. Reconectar cria um backend novo.
                         tts_notify("TTS: outra instancia do backend esta na porta. Pressione v para reconectar.")
                         tts_state.stale_backend = True
                         tts_state.sock = None
@@ -133,6 +114,8 @@ init 999 python:
 
     def tts_kill():
         tts_state.listening = False
+        tts_state.connecting = False
+        tts_state.owns_backend = False
         if tts_state.sock:
             try:
                 tts_state.sock.sendall(b"QUIT\n")
@@ -143,7 +126,7 @@ init 999 python:
             except Exception:
                 pass
             tts_state.sock = None
-            
+
         if tts_state.proc:
             try:
                 tts_state.proc.terminate()
@@ -151,9 +134,10 @@ init 999 python:
                     tts_state.proc.wait(timeout=0.5)
                 except Exception:
                     tts_state.proc.kill()
-            except Exception: pass
+            except Exception:
+                pass
             tts_state.proc = None
-        
+
         status_path = os.path.join(renpy.config.gamedir, "tts_ready.txt")
         if os.path.exists(status_path):
             try:
@@ -161,132 +145,170 @@ init 999 python:
             except Exception:
                 pass
 
-    def tts_connect(quiet=False):
-        import socket
-        
-        # 1. Se já temos um socket funcional, não faz nada
+    def tts_shutdown():
+        """Encerra o backend proprio ao fechar o jogo; se externo, so desconecta."""
+        if getattr(tts_state, "owns_backend", False) or tts_state.proc is not None:
+            tts_kill()
+            return
+        tts_state.listening = False
+        tts_state.connecting = False
         if tts_state.sock:
             try:
-                # Teste rápido de conexão
-                tts_state.sock.sendall(b"\n") 
-                if not quiet: tts_notify("TTS já está conectado.")
-                return True
+                tts_state.sock.close()
             except Exception:
-                tts_state.listening = False
-                tts_state.sock = None
+                pass
+            tts_state.sock = None
 
-        if not quiet: tts_notify("Conectando ao servidor TTS...")
-        
+    def tts_connect(quiet=False):
+        import socket
+
+        with _tts_connect_lock:
+            if tts_state.sock:
+                try:
+                    tts_state.sock.sendall(b"\n")
+                    if not quiet:
+                        tts_notify("TTS já está conectado.")
+                    return True
+                except Exception:
+                    tts_state.listening = False
+                    tts_state.sock = None
+
+            if getattr(tts_state, "connecting", False) or (tts_state.proc and tts_state.proc.poll() is None):
+                if not quiet:
+                    tts_notify("TTS inicializando...")
+                return True
+            tts_state.connecting = True
+
+        if not quiet:
+            tts_notify("Conectando ao servidor TTS...")
+
         # 2. Tentar conectar ao Socket (caso o usuário já tenha aberto o backend manualmente)
-        # Tentativas limitadas: um backend que ainda esta bindando nao deve custar
-        # o "jogo ficou mudo" na primeira tentativa.
         for attempt in range(3):
+            s = None
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(2.0)
                 s.connect(("127.0.0.1", TTS_PORT))
-                s.settimeout(None) # Remove timeout para o listener não cair
+                s.settimeout(None)
                 tts_state.sock = s
                 tts_state.listening = True
                 tts_state.stale_backend = False
-                # Backend externo: nao ha token autoritativo para comparar.
+                tts_state.owns_backend = False
+                tts_state.connecting = False
                 tts_state.expected_backend_token = None
                 _tts_send_hello(s)
                 t = threading.Thread(target=_tts_socket_listener, args=(s,))
                 t.daemon = True
                 t.start()
-                if not quiet: tts_notify("Conectado ao Backend Externo!")
+                _tts_flush_pending_speech()
+                if not quiet:
+                    tts_notify("Conectado ao Backend Externo!")
                 return True
             except Exception:
+                if s is not None:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
                 time.sleep(0.4)
-
 
         # 3. Abrir o processo se não estiver rodando
         tts_kill()
-        
+        tts_state.connecting = True
+
         env = os.environ.copy()
         env["TTS_ENGINE"] = TTS_ENGINE
         env["TTS_LOG_DIR"] = renpy.config.gamedir
         env["TTS_PORT"] = str(TTS_PORT)
-        
+
         try:
             startupinfo = None
             if os.name == 'nt':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = 0 
+                startupinfo.wShowWindow = 0
 
-            py_path = "pythonw.exe" if os.name == 'nt' else "python3"
-            if os.name == 'nt':
-                import shutil
-                if not shutil.which(py_path):
-                    if shutil.which("python.exe"):
-                        py_path = "python.exe"
-                    else:
-                        local_app_data = os.environ.get("LOCALAPPDATA", "")
-                        py312 = os.path.join(local_app_data, "Programs", "Python", "Python312", "pythonw.exe")
-                        if os.path.exists(py312):
-                            py_path = py312
-                        else:
-                            py312_console = os.path.join(local_app_data, "Programs", "Python", "Python312", "python.exe")
-                            if os.path.exists(py312_console):
-                                py_path = py312_console
+            import shutil
+            py_path = find_backend_python(os.environ, os.path.exists, shutil.which, os.name)
 
             server_script = os.path.join(renpy.config.gamedir, "tts_server.py")
-            
+
             tts_state.proc = subprocess.Popen(
-                [py_path, "-u", server_script, TTS_LANG, TTS_VOICE, str(tts_state.speed)],
+                [py_path, "-u", server_script, TTS_LANG, TTS_VOICE, str(tts_state.speed), "--parent-pid", str(os.getpid())],
                 env=env,
                 startupinfo=startupinfo,
                 creationflags=0x08000000 if os.name == 'nt' else 0
             )
+            tts_state.owns_backend = True
 
-            
-            # Aguardar o servidor subir e tentar conectar via socket (retry loop)
             def _retry_connect():
-                time.sleep(2) # Espera inicial
-                for i in range(30):
-                    try:
-                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        s.settimeout(2.0)
-                        s.connect(("127.0.0.1", TTS_PORT))
-                        s.settimeout(None) # Remove timeout para o listener não cair
-                        tts_state.sock = s
-                        tts_state.listening = True
-                        tts_state.stale_backend = False
-                        # Token publicado pelo backend que acabamos de iniciar. Se o
-                        # HELLO trouxer outro token, outra instancia esta na porta.
-                        tts_state.expected_backend_token = _tts_backend_instance_token()
-                        _tts_send_hello(s, tts_state.expected_backend_token)
-                        t = threading.Thread(target=_tts_socket_listener, args=(s,))
-                        t.daemon = True
-                        t.start()
-                        if not quiet: tts_notify("TTS Online (Auto-start)")
+                try:
+                    time.sleep(2)
+                    for i in range(60):
+                        if tts_state.proc and tts_state.proc.poll() is not None:
+                            break
+                        token = _tts_backend_instance_token()
+                        if tts_state.proc and not token:
+                            time.sleep(1.5)
+                            continue
+                        s = None
                         try:
-                            renpy.restart_interaction()
+                            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            s.settimeout(2.0)
+                            s.connect(("127.0.0.1", TTS_PORT))
+                            s.settimeout(None)
+                            tts_state.sock = s
+                            tts_state.listening = True
+                            tts_state.stale_backend = False
+                            tts_state.expected_backend_token = token or _tts_backend_instance_token()
+                            _tts_send_hello(s, tts_state.expected_backend_token)
+                            t = threading.Thread(target=_tts_socket_listener, args=(s,))
+                            t.daemon = True
+                            t.start()
+                            _tts_flush_pending_speech()
+                            if not quiet:
+                                tts_notify("TTS Online (Auto-start)")
+                            try:
+                                renpy.restart_interaction()
+                            except Exception:
+                                pass
+                            return
                         except Exception:
-                            pass
-                        return
-                    except Exception:
-                        time.sleep(2)
-
-                if not quiet: tts_notify("Erro: Não foi possível conectar ao servidor TTS.")
+                            if s is not None:
+                                try:
+                                    s.close()
+                                except Exception:
+                                    pass
+                            time.sleep(2)
+                    if not quiet:
+                        tts_notify("Erro: Não foi possível conectar ao servidor TTS.")
+                finally:
+                    tts_state.connecting = False
 
             t = threading.Thread(target=_retry_connect)
             t.daemon = True
             t.start()
             return True
         except Exception as e:
+            tts_state.connecting = False
+            tts_state.owns_backend = False
             tts_notify("Erro ao iniciar processo TTS: " + str(e))
         return False
 
     def tts_speak(text, voice=None):
+        if not text or not getattr(tts_state, "tts_audio_enabled", True):
+            return
+        if not tts_state.sock:
+            tts_state.pending_speech = (text, voice)
+            if not getattr(tts_state, "connecting", False):
+                t = threading.Thread(target=tts_connect, args=(True,))
+                t.daemon = True
+                t.start()
+            return
         speak(tts_state, text, voice, TTS_VOICE, renpy.substitute, tts_notify)
 
     def _tts_extract_speaker(kwargs=None):
-        who = None
-        if kwargs and isinstance(kwargs, dict):
-            who = kwargs.get("who")
+        who = kwargs.get("who") if (kwargs and isinstance(kwargs, dict)) else None
         if not who:
             who = getattr(renpy.store, "_last_say_who", None)
         if who:
@@ -330,13 +352,7 @@ init 999 python:
         return extract_callback_text(kwargs)
 
     def _tts_install_phone_callback_wrappers():
-        # Alguns jogos desenham o telefone por callbacks proprios, que passam
-        # pelo hook global de personagem.
-        install_phone_callback_wrappers(
-            renpy.store,
-            lambda text: tts_speak_once(text),
-            ("Phone_SendSound", "Phone_ReceiveSound"),
-        )
+        install_phone_callback_wrappers(renpy.store, lambda text: tts_speak_once(text), ("Phone_SendSound", "Phone_ReceiveSound"))
 
     def _send_speed():
         send_speed(tts_state, tts_notify)
@@ -348,21 +364,18 @@ init 999 python:
         decrease_speed(tts_state, persistent, tts_notify)
 
     def tts_toggle_auto():
-        toggle_auto(
-            tts_state,
-            persistent,
-            _preferences,
-            tts_notify,
-            lambda: renpy.restart_interaction(),
-        )
+        toggle_auto(tts_state, persistent, _preferences, tts_notify, lambda: renpy.restart_interaction())
+
+    def _tts_wake_audio():
+        cur = getattr(tts_state, "current_text", "")
+        if cur:
+            tts_state.pending_speech = (cur, _tts_resolve_voice(_tts_extract_speaker()))
+        t = threading.Thread(target=tts_connect, args=(True,))
+        t.daemon = True
+        t.start()
 
     def tts_toggle_audio():
-        return toggle_audio(
-            tts_state,
-            persistent,
-            tts_notify,
-            lambda: renpy.restart_interaction(),
-        )
+        return toggle_audio(tts_state, persistent, tts_notify, lambda: renpy.restart_interaction(), on_disable=tts_kill, on_enable=_tts_wake_audio)
 
     def _tts_callback(event, **kwargs):
         if event == "begin":
@@ -380,31 +393,18 @@ init 999 python:
                 tts_state.last_spoken = what
                 tts_state.is_playing = False
 
-    # Injeção segura
     config.all_character_callbacks.append(_tts_callback)
-    
+
     km_dict = {
-        'v': tts_connect,
-        'V': tts_connect,
-        'shift_K_v': tts_connect,
-        'a': tts_toggle_auto,
-        'A': tts_toggle_auto,
-        'shift_K_a': tts_toggle_auto,
-        'K_a': tts_toggle_auto,
-        't': tts_toggle_audio,
-        'T': tts_toggle_audio,
-        'shift_K_t': tts_toggle_audio,
-        'K_t': tts_toggle_audio,
-        'm': tts_toggle_audio,
-        'M': tts_toggle_audio,
-        'K_EQUALS': tts_increase_speed,
-        'K_MINUS': tts_decrease_speed,
-        'K_KP_PLUS': tts_increase_speed,
-        'K_KP_MINUS': tts_decrease_speed
+        'v': tts_connect, 'V': tts_connect, 'shift_K_v': tts_connect,
+        'a': tts_toggle_auto, 'A': tts_toggle_auto, 'shift_K_a': tts_toggle_auto, 'K_a': tts_toggle_auto,
+        't': tts_toggle_audio, 'T': tts_toggle_audio, 'shift_K_t': tts_toggle_audio, 'K_t': tts_toggle_audio,
+        'm': tts_toggle_audio, 'M': tts_toggle_audio,
+        'K_EQUALS': tts_increase_speed, 'K_MINUS': tts_decrease_speed,
+        'K_KP_PLUS': tts_increase_speed, 'K_KP_MINUS': tts_decrease_speed,
     }
     config.underlay.append(renpy.Keymap(**km_dict))
 
-    # Sincroniza keymap nativo do Ren'Py para toggle_afm
     try:
         if hasattr(config, "keymap") and isinstance(config.keymap, dict):
             afm_keys = config.keymap.setdefault("toggle_afm", [])
@@ -430,23 +430,25 @@ init 999 python:
         _tts_install_phone_callback_wrappers()
         if hasattr(tts_state, "_load_voice_map"):
             tts_state._load_voice_map()
-        tts_connect(True)
+        if getattr(tts_state, "tts_audio_enabled", True):
+            tts_connect(True)
 
     _tts_install_display_hook()
     _tts_install_save_compat_hook()
     _tts_install_phone_callback_wrappers()
     config.start_callbacks.append(tts_start_callback)
     config.after_load_callbacks.append(tts_start_callback)
+    if hasattr(config, "quit_callbacks"):
+        config.quit_callbacks.append(tts_shutdown)
+    atexit.register(tts_shutdown)
     config.overlay_screens.append("tts_auto_forward_checker")
-    
+
     # Auto-start on boot
     tts_start_callback()
 
 init python:
     class TTSAutoAdvanceAction(Action):
         def __call__(self):
-            # O controlador nao fica no store: ele segura o modulo do Ren'Py,
-            # que nao pode ser picklado dentro de um save.
             AutoAdvanceController(tts_state, renpy, persistent).tick()
 
 screen tts_auto_forward_checker():

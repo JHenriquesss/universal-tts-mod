@@ -1,7 +1,11 @@
+import json
 import os
 import queue
+import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -9,6 +13,7 @@ RENPY_MOD_DIR = os.path.join(ROOT_DIR, "renpy_mod")
 if RENPY_MOD_DIR not in sys.path:
     sys.path.insert(0, RENPY_MOD_DIR)
 
+import tts_protocol
 from tts_protocol import (
     CLIENT_COMMANDS,
     CMD_HELLO,
@@ -88,6 +93,57 @@ class TestTtsProtocol(unittest.TestCase):
             CLIENT_COMMANDS,
             "PLAYBACK_DONE is sent by the backend, never requested by the client",
         )
+
+    def test_bounded_log_rotates_to_single_backup_when_limit_exceeded(self):
+        self.assertTrue(hasattr(tts_protocol, "append_bounded_log"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "tts_server.log")
+            for idx in range(12):
+                tts_protocol.append_bounded_log(
+                    log_path,
+                    f"entry-{idx}-" + ("x" * 60),
+                    max_bytes=350,
+                )
+
+            self.assertTrue(os.path.isfile(log_path))
+            self.assertTrue(os.path.isfile(log_path + ".1"))
+            self.assertLessEqual(os.path.getsize(log_path), 450)
+            with open(log_path, "r", encoding="utf-8") as handle:
+                lines = [json.loads(line)["msg"] for line in handle if line.strip()]
+            self.assertTrue(lines)
+            self.assertIn("entry-11-", lines[-1])
+
+    def test_bounded_log_rejects_invalid_or_negative_env_limits(self):
+        self.assertTrue(hasattr(tts_protocol, "append_bounded_log"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = os.path.join(tmpdir, "tts_server.log")
+            for bad_limit in ("-100", "0", "not-a-number"):
+                with mock.patch.dict(os.environ, {"TTS_MAX_LOG_BYTES": bad_limit}):
+                    tts_protocol.append_bounded_log(log_path, f"msg-{bad_limit}")
+
+            self.assertTrue(os.path.isfile(log_path))
+            self.assertFalse(os.path.exists(log_path + ".1"))
+
+    def test_is_pid_alive_handles_live_dead_and_invalid_pids(self):
+        self.assertTrue(hasattr(tts_protocol, "is_pid_alive"))
+        for invalid in (None, 0, -5, "not_pid"):
+            self.assertFalse(tts_protocol.is_pid_alive(invalid))
+
+        sleeper = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            self.assertTrue(tts_protocol.is_pid_alive(sleeper.pid))
+        finally:
+            sleeper.terminate()
+            sleeper.wait(timeout=5)
+            for stream in (sleeper.stdout, sleeper.stderr):
+                if stream is not None:
+                    stream.close()
+
+        self.assertFalse(tts_protocol.is_pid_alive(sleeper.pid))
 
 
 if __name__ == "__main__":

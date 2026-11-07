@@ -98,6 +98,29 @@ python install_tts_mod.py --game-folder "path\to\GameFolder" --textractor-runtim
 
 The Falcom bridge does not use the Windows clipboard. It receives only the private output of `TextractorCLI.exe`, so text copied or typed in a browser or another application cannot be sent to TTS. The `falcom_launcher.py` supervisor records launcher output in `tts_backend_console.log` and bridge diagnostics in `falcom_text_hook.log`; it stops only the processes it created when the game exits.
 
+## Backend Resource Use
+
+The backend runs the Kokoro-82M model on **ONNX Runtime**, without PyTorch, and is tuned to share the PC with the game and other heavy programs:
+
+- Synthesis runs on the CPU and uses about a quarter of the logical cores (at most 4). Override with `TTS_THREADS=<n>`.
+- The process runs at below-normal priority. Set `TTS_PRIORITY=normal` to turn this off.
+- Idle RAM goes back to Windows after loading and after 30 seconds without speech.
+- `instalar.bat` creates a shared lightweight runtime in `%LOCALAPPDATA%\UniversalKokoroTTS\runtime` and downloads the model (`kokoro-v1.0.onnx`, ~310 MB, plus `voices-v1.0.bin`) into `%LOCALAPPDATA%\UniversalKokoroTTS\onnx` (or `TTS_ONNX_DIR`). The Ren'Py client and `run_backend.bat` use that runtime before any global Python.
+- English pronunciation comes from misaki, the same converter the original Kokoro package uses. Other languages use espeak-ng.
+
+### Optional model settings
+
+In the game's `game` folder, `tts_config.json` can pick another model variant or pronunciation:
+
+```json
+{"onnx_model": "int8", "onnx_g2p": "misaki"}
+```
+
+- `onnx_model`: `fp32` (default, original weights) or `int8` (about 200 MB less RAM, slightly lower fidelity). Download `kokoro-v1.0.int8.onnx` from the [kokoro-onnx model release](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0) into the model folder first.
+- `onnx_g2p`: `misaki` (default) or `espeak` (faster startup, different English pronunciation).
+
+To compare delay, memory and quality of the variants side by side, run `tools\tts_ab_test.py` with the runtime Python. It writes WAV files and `samples\ab_test\index.html`.
+
 ## Choice Hint Extraction
 
 Extract choice hints from script archives:
@@ -115,7 +138,7 @@ Test backend startup and synthesis without opening a game:
 set TTS_ENGINE=mock
 python smoke_check.py
 ```
-This check does not require kokoro or GPU to pass when running with mock engine.
+This check does not require the Kokoro model to pass when running with mock engine.
 
 ## Release Hygiene
 

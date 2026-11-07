@@ -71,16 +71,63 @@ if not exist ".venv\Scripts\activate.bat" (
     echo [OK] Ambiente virtual (.venv) ja existe.
 )
 
+:: Pacotes do backend: Kokoro no ONNX Runtime, sem PyTorch.
+:: misaki vai sem o extra [en], que puxaria o torch por um plugin do spacy.
+set "TTS_PACKAGES=onnxruntime kokoro-onnx misaki num2words spacy sounddevice soundfile numpy"
+
 :: 4. Instalar dependencias no ambiente virtual
 echo.
-echo [*] Atualizando pip e instalando dependencias (kokoro, sounddevice, soundfile, numpy)...
+echo [*] Atualizando pip e instalando dependencias (%TTS_PACKAGES%)...
 .venv\Scripts\pip.exe install --upgrade pip >nul 2>&1
-.venv\Scripts\pip.exe install kokoro sounddevice soundfile numpy
+.venv\Scripts\pip.exe install %TTS_PACKAGES%
 if %errorlevel% neq 0 (
     echo [ERRO] Falha na instalacao das dependencias Python.
     pause
     exit /b 1
 )
+
+:: 5. Runtime leve do backend, compartilhado por todos os jogos.
+set "TTS_RUNTIME=%LOCALAPPDATA%\UniversalKokoroTTS\runtime"
+echo.
+echo [*] Preparando runtime leve do backend em "%TTS_RUNTIME%"...
+if not exist "%TTS_RUNTIME%\Scripts\python.exe" (
+    "%PYTHON_EXE%" -m venv "%TTS_RUNTIME%"
+)
+"%TTS_RUNTIME%\Scripts\python.exe" -m pip install --upgrade pip >nul 2>&1
+"%TTS_RUNTIME%\Scripts\python.exe" -m pip install %TTS_PACKAGES%
+"%TTS_RUNTIME%\Scripts\python.exe" -m spacy download en_core_web_sm
+set "RUNTIME_STATUS=%errorlevel%"
+:: Restos do antigo motor PyTorch (runtime criado por versoes anteriores).
+"%TTS_RUNTIME%\Scripts\python.exe" -m pip uninstall -y kokoro torch transformers spacy-curated-transformers curated-transformers curated-tokenizers >nul 2>&1
+if %RUNTIME_STATUS% neq 0 (
+    echo [AVISO] Runtime leve incompleto. O backend usara o Python encontrado acima.
+) else (
+    echo [OK] Runtime leve pronto.
+)
+
+:: 6. Modelo Kokoro-82M (ONNX) e vozes, compartilhados por todos os jogos.
+set "TTS_MODELS=%LOCALAPPDATA%\UniversalKokoroTTS\onnx"
+set "TTS_MODEL_URL=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+echo.
+echo [*] Verificando modelo Kokoro em "%TTS_MODELS%"...
+if not exist "%TTS_MODELS%" mkdir "%TTS_MODELS%"
+for %%F in (kokoro-v1.0.onnx voices-v1.0.bin) do (
+    if not exist "%TTS_MODELS%\%%F" (
+        echo [*] Baixando %%F...
+        curl -L --fail -o "%TTS_MODELS%\%%F.part" "%TTS_MODEL_URL%/%%F" && move /y "%TTS_MODELS%\%%F.part" "%TTS_MODELS%\%%F" >nul
+    )
+)
+if not exist "%TTS_MODELS%\kokoro-v1.0.onnx" goto :model_missing
+if not exist "%TTS_MODELS%\voices-v1.0.bin" goto :model_missing
+echo [OK] Modelo Kokoro pronto.
+goto :model_done
+
+:model_missing
+echo [ERRO] Falha ao baixar o modelo Kokoro. Verifique a internet e rode o instalador de novo.
+pause
+exit /b 1
+
+:model_done
 
 echo.
 echo ============================================================

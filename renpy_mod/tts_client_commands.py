@@ -89,8 +89,8 @@ def toggle_auto(state, persistent, preferences, notify, restart_interaction, now
     return new_state
 
 
-def toggle_audio(state, persistent, notify, restart_interaction):
-    """Liga ou desliga o audio do TTS."""
+def toggle_audio(state, persistent, notify, restart_interaction, on_disable=None, on_enable=None):
+    """Liga ou desliga o audio do TTS, hibernando/acordando o backend quando configurado."""
     current = bool(getattr(state, "tts_audio_enabled", True))
     new_state = not current
     state.tts_audio_enabled = new_state
@@ -100,12 +100,17 @@ def toggle_audio(state, persistent, notify, restart_interaction):
         pass
 
     if not new_state:
+        state.pending_speech = None
         if state.sock:
             try:
                 state.sock.sendall(b"STOP\n")
             except Exception:
                 pass
         state.is_playing = False
+        if on_disable is not None:
+            on_disable()
+    elif on_enable is not None:
+        on_enable()
 
     status = "LIGADO" if new_state else "DESLIGADO"
     notify("Áudio TTS: {}".format(status))

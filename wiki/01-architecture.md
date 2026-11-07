@@ -14,7 +14,6 @@
 - Unity side: `unity_mod/src/KokoroTtsPlugin.cs`; BepInEx 5 plugin that captures `UI.Text`/TextMeshPro dialogue and speaks it through the same backend. The BepInEx runtime ships in `unity_mod/bepinex_pack/`.
 - RPG Maker MZ side: `rpgmaker_mz_mod/TTSModMZ.js`; NW.js plugin that connects to the same backend over a TCP socket, with voices in `rpgmaker_mz_mod/voice_map.json`.
 - Installer: `install_tts_mod.py`; detects engine (`renpy`, `unity`, `rpgmaker_mz`, `falcom`), copies TTS-only files by default for Ren'Py, optional choice overlay only via explicit flag. The Falcom engine requires the external Textractor runtime and fails fast when it is missing.
-- Voice experiment: `qwen_voice_pro/qwen_optimizer.py`; standalone spike that describes a voice with Qwen2-Audio. Not wired into the mod, not installed, not in the requirements.
 - Smoke check: `smoke_check.py`; starts backend with `TTS_ENGINE=mock`, isolated port/log dir, sends socket command + `QUIT`, cleans up child process.
 - Release manifest/archive: `release_manifest.py`; read-only manifest check, package/version metadata, default versioned TTS-only zip builder using manifest destinations.
 
@@ -38,7 +37,9 @@
 - Choice overlay files only if using choice-hint feature: `choice_hints_core.py`, `zzz_mod_choice_consequences.rpy`, generated hints.
 - Tests enforce no `renpy_mod/__pycache__`, `*.pyc`, `*.log`, or `tts_ready.txt` artifacts.
 - Requirements/install path: Kokoro, sounddevice, soundfile, numpy. Edge/Sherpa/cache paths removed.
-- `qwen_voice_pro/` is a spike with no consumer: a 7B model that describes a voice for cloning systems the project does not integrate. It is not installed, not in the project requirements and not in the CI, and a guard keeps it that way.
+- Backend runtime: `instalar.bat` builds `%LOCALAPPDATA%\UniversalKokoroTTS\runtime` (onnxruntime, kokoro-onnx, misaki without the `[en]` extra, spacy, num2words, audio libs; no PyTorch) and downloads the Kokoro-82M ONNX model and voices into `%LOCALAPPDATA%\UniversalKokoroTTS\onnx`. It also uninstalls leftovers of the old PyTorch engine from runtimes built by earlier versions. `tts_client_state.find_backend_python` and `run_backend.bat` prefer this runtime over any global Python.
+- Engines: `KokoroEngine` runs Kokoro-82M on ONNX Runtime through `OnnxPipeline` (sentence split, misaki G2P for English with espeak fallback, espeak-ng for other languages, blended voices) plus the streaming playback queue and session cache. `MockEngine` is test-only. `tts_protocol.resolve_engine_name` returns `mock` only when `TTS_ENGINE` or `tts_config.json` ask for it; anything else (including the old `onnx` value) is `kokoro`. `tts_config.json` may set `onnx_model` (`fp32`/`int8`) and `onnx_g2p` (`misaki`/`espeak`). The PyTorch engine (`kokoro` package, `KPipeline`) was removed on 2026-11-07 after the in-game A/B test. `tools/tts_ab_test.py` compares the ONNX variants.
+- The `qwen_voice_pro/` spike and the per-game one-off scripts in `tools/` were removed on 2026-11-07; `extract_menu_hints_generic.py` covers choice-hint extraction for any game.
 
 ## Configuration
 - `TTS_ENGINE = "kokoro"`; tests set `TTS_ENGINE=mock`.
