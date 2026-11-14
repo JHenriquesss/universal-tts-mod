@@ -173,6 +173,36 @@ class TestRpgMakerMzMod(unittest.TestCase):
         self.assertIn("`SET_SPEED:${this.speed.toFixed(2)}\\n`", content)
         self.assertIn("`${text}\\n`", content)
 
+    def test_tts_mod_mz_buffers_fragmented_playback_done_and_sanitizes_newlines(self):
+        js_path = os.path.join(ROOT_DIR, "rpgmaker_mz_mod", "TTSModMZ.js")
+        with open(js_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("rxBuffer", content)
+        self.assertIn("tts_config.json", content)
+        self.assertIn("replace(/[\\r\\n]+/g", content)
+        self.assertIn("3.0", content)
+
+    def test_reinstall_preserves_custom_voice_map_and_applies_default_voice(self):
+        from install_tts_mod import install_game
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_mock_rmmz_game(tmpdir)
+            vmap_path = os.path.join(game_root, "voice_map.json")
+            custom_map = {"default": "af_sky", "Reid": "am_onyx", "Heroine": "af_bella"}
+            with open(vmap_path, "w", encoding="utf-8") as f:
+                json.dump(custom_map, f)
+
+            install_game(game_root, default_voice="af_heart")
+
+            with open(vmap_path, "r", encoding="utf-8") as f:
+                self.assertEqual(json.load(f), custom_map)
+
+            cfg_path = os.path.join(game_root, "tts_config.json")
+            self.assertTrue(os.path.exists(cfg_path))
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                self.assertEqual(json.load(f).get("default_voice"), "af_heart")
+
 
 if __name__ == "__main__":
     unittest.main()

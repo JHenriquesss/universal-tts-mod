@@ -1,6 +1,7 @@
 import sys
 sys.dont_write_bytecode = True
 import argparse
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ TEXTRACTOR_REQUIRED_FILES = ("TextractorCLI.exe",)
 BACKEND_RUNTIME_FILES = (
     "tts_server.py",
     "tts_engines.py",
+    "tts_onnx_pipeline.py",
     "text_cleaner.py",
     "tts_protocol.py",
 )
@@ -279,10 +281,16 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
         if os.path.exists(plugin_src):
             entries.append(CopyEntry(plugin_src, os.path.join(game_root, "js", "plugins", "TTSModMZ.js")))
 
-        # 4. Mapa de vozes na raiz do jogo
-        vmap_src = os.path.join(RPGMAKER_MZ_MOD_DIR, "voice_map.json")
-        if os.path.exists(vmap_src):
-            entries.append(CopyEntry(vmap_src, os.path.join(game_root, "voice_map.json")))
+        # 4. Mapa de vozes na raiz do jogo (preserva voice_map customizado se ja existir)
+        dst_vmap = os.path.join(game_root, "voice_map.json")
+        if voice_map:
+            if not os.path.exists(voice_map):
+                raise ValueError(f"Arquivo de vozes não encontrado: {voice_map}")
+            entries.append(CopyEntry(voice_map, dst_vmap))
+        else:
+            vmap_src = os.path.join(RPGMAKER_MZ_MOD_DIR, "voice_map.json")
+            if os.path.exists(vmap_src) and not os.path.exists(dst_vmap):
+                entries.append(CopyEntry(vmap_src, dst_vmap))
 
     else:
         raise ValueError(f"Não foi possível identificar a engine do jogo em: {game_folder}")
@@ -323,49 +331,24 @@ def register_rpgmaker_mz_plugin(game_root):
 
 def create_outer_launchers(outer_folder, inner_root):
     rel_path = os.path.relpath(inner_root, outer_folder)
-    jogar_content = (
-        "@echo off\r\n"
-        "setlocal\r\n"
-        f'cd /d "%~dp0{rel_path}"\r\n'
-        'if exist "jogar.bat" (\r\n'
-        '    call "jogar.bat" %*\r\n'
-        ') else (\r\n'
-        f'    echo [ERRO] jogar.bat nao encontrado na subpasta {rel_path}.\r\n'
-        '    pause\r\n'
-        ')\r\n'
-    )
-    jogar_com_tts_content = (
-        "@echo off\r\n"
-        "setlocal\r\n"
-        f'cd /d "%~dp0{rel_path}"\r\n'
-        'if exist "JOGAR_COM_TTS.bat" (\r\n'
-        '    call "JOGAR_COM_TTS.bat" %*\r\n'
-        ') else (\r\n'
-        f'    echo [ERRO] JOGAR_COM_TTS.bat nao encontrado na subpasta {rel_path}.\r\n'
-        '    pause\r\n'
-        ')\r\n'
-    )
-    run_backend_content = (
-        "@echo off\r\n"
-        "setlocal\r\n"
-        f'cd /d "%~dp0{rel_path}"\r\n'
-        'if exist "run_backend.bat" (\r\n'
-        '    call "run_backend.bat" %*\r\n'
-        ') else (\r\n'
-        f'    echo [ERRO] run_backend.bat nao encontrado na subpasta {rel_path}.\r\n'
-        '    pause\r\n'
-        ')\r\n'
-    )
-    outer_jogar = os.path.join(outer_folder, "jogar.bat")
-    outer_tts = os.path.join(outer_folder, "JOGAR_COM_TTS.bat")
-    outer_backend = os.path.join(outer_folder, "run_backend.bat")
-    with open(outer_jogar, "w", encoding="utf-8") as f:
-        f.write(jogar_content)
-    with open(outer_tts, "w", encoding="utf-8") as f:
-        f.write(jogar_com_tts_content)
-    with open(outer_backend, "w", encoding="utf-8") as f:
-        f.write(run_backend_content)
-    return [outer_jogar, outer_tts, outer_backend]
+    created = []
+    for filename in ("jogar.bat", "JOGAR_COM_TTS.bat", "run_backend.bat"):
+        content = (
+            "@echo off\r\n"
+            "setlocal\r\n"
+            f'cd /d "%~dp0{rel_path}"\r\n'
+            f'if exist "{filename}" (\r\n'
+            f'    call "{filename}" %*\r\n'
+            ") else (\r\n"
+            f'    echo [ERRO] {filename} nao encontrado na subpasta {rel_path}.\r\n'
+            "    pause\r\n"
+            ")\r\n"
+        )
+        dest = os.path.join(outer_folder, filename)
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write(content)
+        created.append(dest)
+    return created
 
 
 def install_game(
@@ -417,15 +400,25 @@ def install_game(
         if os.path.normpath(os.path.abspath(game_folder)) != os.path.normpath(game_root):
             outer_installed = create_outer_launchers(os.path.abspath(game_folder), game_root)
             installed.extend(outer_installed)
-        else:
-            parent = os.path.dirname(game_root)
-            parent_name = os.path.basename(parent).lower()
-            if parent and parent_name and parent_name not in ("games", "jogos", "steamapps", "common", ""):
-                outer_installed = create_outer_launchers(parent, game_root)
-                installed.extend(outer_installed)
 
         if engine in ("rpgmaker_mz", "rpgmaker"):
             register_rpgmaker_mz_plugin(game_root)
+
+        if default_voice and engine != "renpy":
+            cfg_path = os.path.join(game_root, "tts_config.json")
+            cfg = {}
+            if os.path.isfile(cfg_path):
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        cfg = loaded
+                except Exception:
+                    cfg = {}
+            cfg["default_voice"] = default_voice
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            installed.append(cfg_path)
 
         if engine == "falcom":
             from falcom_mod.falcom_textractor import write_textractor_config
@@ -452,7 +445,6 @@ def install_game(
     return InstallResult(game_root=game_root, engine=engine, planned=planned, installed=installed, skipped=[])
 
 
-
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Instalador Universal do Mod TTS (Ren'Py + Unity).")
     parser.add_argument("--game-folder", required=True, help="Caminho para a pasta do jogo.")
@@ -466,8 +458,7 @@ def build_arg_parser():
 
 
 def main(argv=None):
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    args = build_arg_parser().parse_args(argv)
     result = install_game(
         args.game_folder,
         with_choice_overlay=args.with_choice_overlay,
@@ -477,7 +468,6 @@ def main(argv=None):
         default_voice=args.default_voice,
         textractor_runtime_dir=args.textractor_runtime,
     )
-
     action = "Simulou instalação de" if args.dry_run else "Instalado"
     print(f"[{result.engine.upper()}] {action} {len(result.planned)} arquivos em {result.game_root}")
     for entry in result.planned:
@@ -496,9 +486,12 @@ def _validate_entries(entries):
     valid = []
     for entry in entries:
         name = os.path.basename(entry.source)
-        if name in FORBIDDEN_NAMES or name.endswith(".pyc") or "tests" in entry.source.split(os.sep):
-            continue
-        valid.append(entry)
+        try:
+            rel_parts = os.path.relpath(entry.source, PROJECT_ROOT).split(os.sep)
+        except ValueError:
+            rel_parts = entry.source.split(os.sep)
+        if name not in FORBIDDEN_NAMES and not name.endswith(".pyc") and "tests" not in rel_parts:
+            valid.append(entry)
     return valid
 
 

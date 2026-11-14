@@ -13,6 +13,25 @@ SERVER_SCRIPT = os.path.join(ROOT_DIR, "renpy_mod", "tts_server.py")
 HOST = "127.0.0.1"
 
 
+def _read_log_file(log_path):
+    """Mensagens do log JSON do backend, ignorando a linha que ainda esta sendo escrita.
+
+    O backend grava enquanto o teste le: no Windows o leitor pode ver o arquivo ja
+    estendido com bytes nulos antes do texto da ultima linha chegar.
+    """
+    messages = []
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip().strip("\x00")
+            if not line:
+                continue
+            try:
+                messages.append(json.loads(line)["msg"])
+            except (ValueError, KeyError, TypeError):
+                continue
+    return messages
+
+
 class TestTTSServerSocketProtocol(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -139,8 +158,7 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
     def _read_log_messages(self):
         if not os.path.exists(self.log_path):
             return []
-        with open(self.log_path, "r", encoding="utf-8") as f:
-            return [json.loads(line)["msg"] for line in f if line.strip()]
+        return _read_log_file(self.log_path)
 
     def _wait_for_log_message(self, predicate):
         deadline = time.time() + 5
@@ -190,7 +208,7 @@ class TestTTSServerSocketProtocol(unittest.TestCase):
     def test_socket_set_voice_changes_voice_used_for_speech(self):
         self._send_line("SET_VOICE:am_adam")
         self._send_line("Voice check.")
-        messages = self._wait_for_log_message(lambda message: "voice=am_adam" in message)
+        messages = self._wait_for_log_message(lambda message: "speak voice=am_adam" in message)
         joined = "\n".join(messages)
 
         self.assertIn("command=SET_VOICE voice=am_adam", joined)
@@ -359,6 +377,8 @@ class TestTTSServerHarnessHelpers(unittest.TestCase):
             shutil.copy2(SERVER_SCRIPT, os.path.join(tmpdir, "tts_server.py"))
             shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "text_cleaner.py"), os.path.join(tmpdir, "text_cleaner.py"))
             shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_engines.py"), os.path.join(tmpdir, "tts_engines.py"))
+            shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_onnx_pipeline.py"), os.path.join(tmpdir, "tts_onnx_pipeline.py"))
+            shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_protocol.py"), os.path.join(tmpdir, "tts_protocol.py"))
 
             env = os.environ.copy()
             env["TTS_ENGINE"] = "mock"
@@ -561,8 +581,7 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
         messages = []
         while time.time() < deadline:
             if os.path.exists(log_path):
-                with open(log_path, "r", encoding="utf-8") as f:
-                    messages = [json.loads(line)["msg"] for line in f if line.strip()]
+                messages = _read_log_file(log_path)
             if any("token_mismatch" in message for message in messages):
                 break
             time.sleep(0.1)
@@ -601,6 +620,149 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
             "the worker must release the task when the engine raises, otherwise "
             "unfinished_tasks leaks on every failure",
         )
+
+
+
+    def test_second_backend_in_same_log_dir_preserves_live_ready_file(self):
+        live_status = self._wait_for_status("READY|")
+        second = self._start_backend(self.port, self.log_dir)
+        returncode = second.wait(timeout=15)
+
+        self.assertNotEqual(0, returncode)
+        self.assertEqual(
+            live_status,
+            self._read_status(self.status_path),
+            "a failed duplicate backend in the same folder must not clobber the live server READY token",
+        )
+
+    def test_early_port_bind_precedes_heavy_engine_imports(self):
+        import ast
+
+        with open(SERVER_SCRIPT, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        tree = ast.parse(source)
+        top_level_imports = set()
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module:
+                top_level_imports.add(node.module)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    top_level_imports.add(alias.name.split(".")[0])
+
+        for heavy_mod in ("tts_engines", "text_cleaner", "onnxruntime", "kokoro_onnx", "misaki"):
+            self.assertNotIn(
+                heavy_mod,
+                top_level_imports,
+                f"{heavy_mod} must not be imported at top-level before port bind",
+            )
+
+        main_body = source.split("def main():", 1)[1]
+        self.assertLess(
+            main_body.index("server_sock.bind("),
+            main_body.index("_make_engine("),
+            "port bind must happen before instantiating the TTS engine",
+        )
+
+    def test_server_exits_automatically_when_parent_pid_terminates(self):
+        parent = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        watched_port = self._free_port()
+        watched_dir = os.path.join(self.tempdir.name, "watched-backend")
+        os.makedirs(watched_dir)
+        watched_status = os.path.join(watched_dir, "tts_ready.txt")
+
+        env = os.environ.copy()
+        env["TTS_ENGINE"] = "mock"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["TTS_LOG_DIR"] = watched_dir
+        env["TTS_PORT"] = str(watched_port)
+        watched = subprocess.Popen(
+            [
+                sys.executable,
+                SERVER_SCRIPT,
+                "en",
+                "None",
+                "1.0",
+                "--parent-pid",
+                str(parent.pid),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        self.processes.append(watched)
+        try:
+            self._wait_for_status("READY|", status_path=watched_status)
+            parent.terminate()
+            parent.wait(timeout=5)
+            returncode = watched.wait(timeout=6)
+            self.assertIsNotNone(returncode)
+        finally:
+            if parent.poll() is None:
+                parent.kill()
+                parent.wait(timeout=2)
+            for s in (parent.stdout, parent.stderr):
+                if s is not None:
+                    s.close()
+
+
+class TestTTSServerCommandHelpers(unittest.TestCase):
+    def _import_tts_server(self):
+        renpy_dir = os.path.dirname(SERVER_SCRIPT)
+        if renpy_dir not in sys.path:
+            sys.path.insert(0, renpy_dir)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        import tts_server
+        old_log_path = tts_server.log_path
+        tts_server.log_path = os.path.join(tmp.name, "tts_server.log")
+        self.addCleanup(setattr, tts_server, "log_path", old_log_path)
+        return tts_server
+
+    def test_enqueue_control_item_uses_timeout_when_queue_is_full(self):
+        import queue as py_queue
+        tts_server = self._import_tts_server()
+
+        full_q = py_queue.Queue(maxsize=1)
+        full_q.put(("SPEAK", "occupied"))
+        start = time.monotonic()
+        accepted = tts_server._enqueue_control_item(("SET_VOICE", "am_adam"), target_queue=full_q, timeout=0.05)
+        elapsed = time.monotonic() - start
+
+        self.assertFalse(accepted)
+        self.assertLess(elapsed, 0.5)
+
+    def test_handle_stop_command_calls_engine_stop_immediately_and_preserves_settings(self):
+        import queue as py_queue
+        tts_server = self._import_tts_server()
+
+        class FakeEngine:
+            def __init__(self):
+                self.stop_calls = 0
+
+            def stop(self):
+                self.stop_calls += 1
+
+        q = py_queue.Queue(maxsize=10)
+        q.put(("SPEAK", "old sentence"))
+        q.put(("SET_VOICE", "af_bella"))
+        q.put(("SPEAK", "another old sentence"))
+
+        engine = FakeEngine()
+        tts_server._handle_stop_command(engine, target_queue=q)
+
+        self.assertEqual(engine.stop_calls, 1)
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+        self.assertEqual(items, [("STOP", None), ("SET_VOICE", "af_bella")])
 
 
 if __name__ == "__main__":

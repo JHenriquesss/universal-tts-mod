@@ -48,12 +48,39 @@
         defaultVoice: "am_onyx",
         voiceMap: {},
         lastSpokenKey: "",
+        rxBuffer: "",
 
         init() {
+            this.loadConfig();
             this.loadVoiceMap();
             this.connect();
             this.setupKeyboardListeners();
             console.log("[TTSModMZ] Initialized successfully.");
+        },
+
+        loadConfig() {
+            try {
+                const searchPaths = [
+                    path.join(process.cwd(), "tts_config.json"),
+                    path.join(__dirname, "..", "..", "tts_config.json"),
+                    path.join(__dirname, "tts_config.json")
+                ];
+                for (const p of searchPaths) {
+                    if (fs.existsSync(p)) {
+                        const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+                        if (Number.isInteger(cfg.port) && cfg.port > 0) this.port = cfg.port;
+                        if (typeof cfg.speed === "number" && cfg.speed >= 0.5 && cfg.speed <= 3.0) this.speed = cfg.speed;
+                        if (typeof cfg.default_voice === "string" && cfg.default_voice.trim()) {
+                            this.defaultVoice = cfg.default_voice.trim();
+                            this.currentVoice = this.defaultVoice;
+                        }
+                        console.log(`[TTSModMZ] Loaded tts_config.json from: ${p}`);
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.warn("[TTSModMZ] Failed to parse tts_config.json:", err);
+            }
         },
 
         loadVoiceMap() {
@@ -97,11 +124,12 @@
             });
 
             socket.on("data", (data) => {
-                const text = data.toString("utf8");
-                const lines = text.split("\n");
-                for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (trimmed === "PLAYBACK_DONE") {
+                this.rxBuffer += data.toString("utf8");
+                let newlineIdx;
+                while ((newlineIdx = this.rxBuffer.indexOf("\n")) !== -1) {
+                    const line = this.rxBuffer.slice(0, newlineIdx).trim();
+                    this.rxBuffer = this.rxBuffer.slice(newlineIdx + 1);
+                    if (line === "PLAYBACK_DONE") {
                         this.playbackFinished = true;
                     }
                 }
@@ -113,6 +141,7 @@
 
             socket.on("close", () => {
                 this.connected = false;
+                this.rxBuffer = "";
                 if (!this.reconnectTimer) {
                     this.reconnectTimer = setInterval(() => {
                         this.connect();
@@ -229,7 +258,7 @@
         speak(rawText, rawSpeaker) {
             if (!this.enabled || !this.connected) return;
 
-            const text = this.cleanText(rawText);
+            const text = String(this.cleanText(rawText) || "").replace(/[\r\n]+/g, " ").trim();
             if (!text) return;
 
             const speaker = rawSpeaker || "";
@@ -283,7 +312,7 @@
 
                 // + (107 or 187 with shift) : Speed up
                 if (e.keyCode === 107 || (e.keyCode === 187 && e.shiftKey)) {
-                    this.speed = Math.min(2.5, this.speed + 0.1);
+                    this.speed = Math.min(3.0, this.speed + 0.1);
                     console.log(`[TTSModMZ] Velocidade TTS: ${this.speed.toFixed(2)}x`);
                 }
 

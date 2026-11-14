@@ -17,20 +17,26 @@ if exist ".venv\Scripts\python.exe" (
     goto :PYTHON_FOUND
 )
 
-:: 2. Tentar usar o .venv do projeto (3 niveis acima)
+:: 2. Runtime leve dedicado (Kokoro no ONNX Runtime), criado pelo instalar.bat
+if exist "%LOCALAPPDATA%\UniversalKokoroTTS\runtime\Scripts\python.exe" (
+    set "PYTHON_EXE=%LOCALAPPDATA%\UniversalKokoroTTS\runtime\Scripts\python.exe"
+    goto :PYTHON_FOUND
+)
+
+:: 3. Tentar usar o .venv do projeto (3 niveis acima)
 if exist "..\..\..\.venv\Scripts\python.exe" (
     set "PYTHON_EXE=..\..\..\.venv\Scripts\python.exe"
     goto :PYTHON_FOUND
 )
 
-:: 3. Tentar o Python do PATH
+:: 4. Tentar o Python do PATH
 where python >nul 2>&1
 if %errorlevel% equ 0 (
     set "PYTHON_EXE=python"
     goto :PYTHON_FOUND
 )
 
-:: 4. Tentar o Python 3.12 instalado pelo instalar.bat
+:: 5. Tentar o Python 3.12 instalado pelo instalar.bat
 if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
     set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
     goto :PYTHON_FOUND

@@ -104,6 +104,16 @@ class TestUnityPluginProject(unittest.TestCase):
             "the build path must be normalised, or the binary carries the machine that built it",
         )
 
+    def test_plugin_source_has_consistent_version_sanitization_and_property_cache(self):
+        cs_path = os.path.join(UNITY_MOD_DIR, "src", "KokoroTtsPlugin.cs")
+        with open(cs_path, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        self.assertIn('"1.4.0")', source)
+        self.assertNotIn('"1.3.0")', source)
+        self.assertIn("tmpTextPropCache", source)
+        self.assertIn('Replace("\\n", " ")', source)
+
 
 if __name__ == "__main__":
     unittest.main()

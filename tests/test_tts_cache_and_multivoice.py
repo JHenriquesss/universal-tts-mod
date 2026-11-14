@@ -112,7 +112,7 @@ class TestTtsCacheAndMultiVoice(unittest.TestCase):
             finally:
                 KokoroEngine.__init__ = original_init
 
-    def test_cache_key_changes_when_the_synthesis_model_changes(self):
+    def test_cache_key_changes_when_the_synthesis_model_version_changes(self):
         import tempfile
         import tts_engines
         with tempfile.TemporaryDirectory() as tmp_dir:

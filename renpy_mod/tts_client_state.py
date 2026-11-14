@@ -13,6 +13,38 @@ import os
 DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.25
 
+# Runtime dedicado do backend: venv leve com Kokoro no ONNX Runtime, criado pelo instalar.bat.
+# Fica fora do Python global para evitar dependencias pesadas (~1 GB a mais de RAM).
+RUNTIME_DIR_PARTS = ("UniversalKokoroTTS", "runtime")
+
+
+def find_backend_python(environ, exists, which, os_name="nt"):
+    """Escolhe o Python que roda o backend, do mais leve para o mais generico.
+
+    Ordem no Windows: runtime dedicado, ``pythonw``/``python`` do PATH e o
+    Python 3.12 instalado pelo ``instalar.bat``. ``exists`` e ``which`` chegam
+    por injecao para a regra poder ser testada fora do jogo.
+    """
+    if os_name != "nt":
+        return "python3"
+    local_app_data = environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        runtime_scripts = os.path.join(local_app_data, *(RUNTIME_DIR_PARTS + ("Scripts",)))
+        for name in ("pythonw.exe", "python.exe"):
+            candidate = os.path.join(runtime_scripts, name)
+            if exists(candidate):
+                return candidate
+    for name in ("pythonw.exe", "python.exe"):
+        if which(name):
+            return name
+    if local_app_data:
+        py312_dir = os.path.join(local_app_data, "Programs", "Python", "Python312")
+        for name in ("pythonw.exe", "python.exe"):
+            candidate = os.path.join(py312_dir, name)
+            if exists(candidate):
+                return candidate
+    return "pythonw.exe"
+
 
 class TTSState(object):
     """Estado do cliente: socket, backend, voz, velocidade e auto-advance."""
@@ -34,6 +66,9 @@ class TTSState(object):
 
         self.proc = None
         self.sock = None
+        self.connecting = False
+        self.owns_backend = False
+        self.pending_speech = None
         self.voices = []
         self.last_spoken = None
 
@@ -57,6 +92,11 @@ class TTSState(object):
         self.backend_token = None
         self.expected_backend_token = None
         self.stale_backend = False
+
+        # Ultima fala vista pelo jogo, registrada no ponto em que o say e
+        # chamado. O callback de personagem do Ren'Py 7 nao entrega o texto.
+        self.last_say_who = None
+        self.last_say_what = None
 
         # Garante que speed nunca seja None, mesmo se o persistent salvou como None
         saved_speed = getattr(persistent, "tts_speed", DEFAULT_SPEED)
@@ -113,13 +153,20 @@ class TTSState(object):
         self.speak_start_time = 0.0
         self.expected_duration = 0.0
         self.last_spoken = None
+        self.pending_speech = None
         self.backend_token = None
         self.expected_backend_token = None
         self.stale_backend = False
+        self.last_say_who = None
+        self.last_say_what = None
         if not hasattr(self, "sock"):
             self.sock = None
         if not hasattr(self, "proc"):
             self.proc = None
         if not hasattr(self, "listening"):
             self.listening = False
+        if not hasattr(self, "connecting"):
+            self.connecting = False
+        if not hasattr(self, "owns_backend"):
+            self.owns_backend = False
         self._load_voice_map()

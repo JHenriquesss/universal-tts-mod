@@ -146,6 +146,25 @@ class TestTTSClientLayout(unittest.TestCase):
                 "{} must exist in renpy_mod/".format(name),
             )
 
+    def test_core_modules_stay_within_500_lines(self):
+        checked = (
+            "install_tts_mod.py",
+            os.path.join("renpy_mod", "tts_engines.py"),
+            os.path.join("renpy_mod", "tts_onnx_pipeline.py"),
+            os.path.join("renpy_mod", "tts_protocol.py"),
+            os.path.join("renpy_mod", "tts_server.py"),
+        )
+        for rel in checked:
+            full_path = os.path.join(ROOT_DIR, rel)
+            self.assertTrue(os.path.isfile(full_path), "missing {}".format(rel))
+            with open(full_path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+            self.assertLessEqual(
+                len(lines),
+                500,
+                "{} has {} lines (limit 500)".format(rel, len(lines)),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

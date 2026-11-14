@@ -21,8 +21,8 @@ if not errorlevel 1 (
     goto :find_game
 )
 
-echo [*] Iniciando o servidor TTS em nova janela...
-start "TTS Backend" cmd /c run_backend.bat
+echo [*] Iniciando o servidor TTS em nova janela (encerra automaticamente ao fechar o jogo)...
+start "TTS Backend" cmd /c run_backend.bat --exit-on-disconnect
 
 echo [*] Aguardando inicializacao do modelo Kokoro TTS...
 set /a ELAPSED=0
@@ -70,4 +70,3 @@ echo ============================================================
 echo   Bom jogo!
 echo ============================================================
 timeout /t 5
-

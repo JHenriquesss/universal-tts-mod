@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using System.Runtime.InteropServices;
 using BepInEx;
@@ -13,7 +14,7 @@ using UnityEngine.UI;
 
 namespace KokoroTts
 {
-    [BepInPlugin("com.kokoro.tts.unity", "Kokoro TTS Plugin", "1.3.0")]
+    [BepInPlugin("com.kokoro.tts.unity", "Kokoro TTS Plugin", "1.4.0")]
     public class KokoroTtsPlugin : BaseUnityPlugin
     {
         [DllImport("user32.dll")]
@@ -61,6 +62,19 @@ namespace KokoroTts
 
         private static Type _cachedTmpType = null;
         private static bool _tmpTypeSearched = false;
+        private static readonly Dictionary<Type, PropertyInfo> tmpTextPropCache = new Dictionary<Type, PropertyInfo>();
+
+        private static PropertyInfo GetCachedTextProperty(Type type)
+        {
+            if (type == null) return null;
+            PropertyInfo cached;
+            if (!tmpTextPropCache.TryGetValue(type, out cached))
+            {
+                cached = type.GetProperty("text");
+                tmpTextPropCache[type] = cached;
+            }
+            return cached;
+        }
 
         private static Type GetTmpType()
         {
@@ -204,7 +218,7 @@ namespace KokoroTts
                             Component comp = obj as Component;
                             if (comp != null && comp.gameObject.activeInHierarchy)
                             {
-                                var prop = comp.GetType().GetProperty("text");
+                                PropertyInfo prop = GetCachedTextProperty(comp.GetType());
                                 if (prop != null)
                                 {
                                     string val = prop.GetValue(comp, null) as string;
@@ -302,18 +316,26 @@ namespace KokoroTts
                 string host = serverHost != null ? serverHost.Value : "127.0.0.1";
                 int port = serverPort != null ? serverPort.Value : 5050;
 
-                socket = new TcpClient(host, port);
+                var client = new TcpClient();
+                var connectTask = client.ConnectAsync(host, port);
+                if (!connectTask.Wait(2000))
+                {
+                    try { client.Close(); } catch { }
+                    throw new TimeoutException($"Timeout ao conectar em {host}:{port}");
+                }
+                socket = client;
                 NetworkStream stream = socket.GetStream();
                 writer = new StreamWriter(stream, new UTF8Encoding(false));
                 reader = new StreamReader(stream, new UTF8Encoding(false));
                 isConnected = true;
                 Logger.LogInfo($"--> Conectado com sucesso ao servidor Kokoro TTS em {host}:{port}!");
 
+                writer.WriteLine("HELLO");
                 if (defaultVoice != null && !string.IsNullOrEmpty(defaultVoice.Value))
                 {
                     writer.WriteLine("SET_VOICE:" + defaultVoice.Value);
-                    writer.Flush();
                 }
+                writer.Flush();
 
                 listenerThread = new Thread(ListenServerEvents);
                 listenerThread.IsBackground = true;
@@ -322,7 +344,7 @@ namespace KokoroTts
             catch (Exception ex)
             {
                 Logger.LogError("Falha ao conectar no servidor TTS: " + ex.Message);
-                isConnected = false;
+                DisconnectSocket();
             }
         }
 
@@ -351,24 +373,37 @@ namespace KokoroTts
         {
             try
             {
+                string sanitized = (text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+                if (string.IsNullOrEmpty(sanitized)) return;
+
                 if (writer != null && socket != null && socket.Connected)
                 {
                     writer.WriteLine("STOP");
-                    writer.WriteLine(text);
+                    writer.WriteLine(sanitized);
                     writer.Flush();
-                    Logger.LogInfo("[TTS ENVIADO] " + text);
+                    Logger.LogInfo("[TTS ENVIADO] " + sanitized);
                 }
             }
             catch (Exception ex)
             {
                 Logger.LogError("Erro ao enviar payload TCP: " + ex.Message);
-                isConnected = false;
+                DisconnectSocket();
             }
         }
 
         private void DisconnectSocket()
         {
             isConnected = false;
+            if (writer != null)
+            {
+                try { writer.Dispose(); } catch { }
+                writer = null;
+            }
+            if (reader != null)
+            {
+                try { reader.Dispose(); } catch { }
+                reader = null;
+            }
             if (socket != null)
             {
                 try { socket.Close(); } catch { }

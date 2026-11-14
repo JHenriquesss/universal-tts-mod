@@ -1,161 +1,134 @@
 # -*- coding: utf-8 -*-
+import json
 import os
+import queue
+import secrets
 import sys
-import io
+import threading
+import time
+import warnings
 
-# 1. SILENCIAMENTO TOTAL E ENCODING
-# Redirecionamos TUDO para o log, deixando o stdout livre
+warnings.filterwarnings("ignore")
+
 here = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+if here not in sys.path:
+    sys.path.insert(0, here)
+
 log_dir = os.environ.get("TTS_LOG_DIR") or here
 log_path = os.path.join(log_dir, "tts_server.log")
 status_path = os.path.join(log_dir, "tts_ready.txt")
 
-if os.path.exists(status_path):
-    try: os.remove(status_path)
-    except Exception: pass
+from tts_protocol import (  # noqa: E402
+    CMD_HELLO,
+    CMD_PLAYBACK_DONE,
+    CMD_QUIT,
+    CMD_SET_LANG,
+    CMD_SET_SPEED,
+    CMD_SET_VOICE,
+    CMD_STOP,
+    append_bounded_log,
+    apply_thread_env_limits,
+    configure_windows_stdin_utf8,
+    drain_preserving,
+    has_cli_flag,
+    is_pid_alive,
+    iter_socket_lines,
+    load_json_config,
+    lower_process_priority,
+    normalize_lang_code as _normalize_lang,
+    parse_cli_float_flag,
+    parse_cli_int_flag,
+    remove_owned_status,
+    resolve_cpu_threads,
+    resolve_engine_name,
+    resolve_idle_timeout,
+    resolve_server_port,
+    setup_stream_logger,
+    status_has_live_ready,
+    strip_cli_flags,
+    trim_working_set,
+)
+
 
 def _log(msg):
     try:
-        import time, json
-        data = {"timestamp": time.time(), "msg": msg}
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(data) + "\n")
-    except Exception: pass
+        append_bounded_log(log_path, msg)
+    except Exception:
+        pass
 
-# Redirecionamos para o log, mas MANTEMOS o console visível para o usuário
-def setup_logger():
-    class Logger(object):
-        def __init__(self, original_stream):
-            self.original_stream = original_stream
-            
-        def write(self, message):
-            if message.strip():
-                # Escreve no arquivo de log (JSON)
-                _log(f"{message.strip()}")
-                # Escreve no console real (se disponível)
-                if self.original_stream:
-                    try:
-                        self.original_stream.write(message)
-                        self.original_stream.flush()
-                    except Exception: pass
-                    
-        def flush(self):
-            if self.original_stream:
-                try: self.original_stream.flush()
-                except Exception: pass
 
-    # Salva os streams originais antes de redirecionar
-    orig_stdout = sys.stdout
-    orig_stderr = sys.stderr
-    
-    sys.stdout = Logger(sys.__stdout__ if sys.__stdout__ else orig_stdout)
-    sys.stderr = Logger(sys.__stderr__ if sys.__stderr__ else orig_stderr)
+configure_windows_stdin_utf8(_log)
+setup_stream_logger(_log)
 
-# Forçar o stdin para UTF-8 de forma muito explícita
-if sys.platform == "win32":
-    try:
-        # Tenta usar sys.stdin.buffer se disponível (via Popen PIPE)
-        if hasattr(sys.stdin, 'buffer') and sys.stdin.buffer is not None:
-            sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', errors='replace')
-        elif hasattr(sys, '__stdin__') and sys.__stdin__ is not None and hasattr(sys.__stdin__, 'buffer'):
-            sys.stdin = io.TextIOWrapper(sys.__stdin__.buffer, encoding='utf-8', errors='replace')
-    except Exception as e:
-        _log(f"Aviso: Não foi possível reconfigurar stdin: {e}")
-
-try:
-    import warnings
-    warnings.filterwarnings("ignore")
-    import json
-    import time
-    import queue
-    import threading
-    import re
-
-    if here not in sys.path:
-        sys.path.insert(0, here)
-
-    from text_cleaner import TextCleaner
-    from tts_engines import KokoroEngine, MockEngine, get_available_voices
-    from tts_protocol import (
-        CMD_HELLO,
-        CMD_PLAYBACK_DONE,
-        CMD_QUIT,
-        CMD_SET_LANG,
-        CMD_SET_SPEED,
-        CMD_SET_VOICE,
-        CMD_STOP,
-        drain_preserving,
-    )
-    
-    # Agora que os imports pesados acabaram, podemos silenciar
-    setup_logger()
-except Exception as e:
-    _log(f"ERRO NOS IMPORTS: {e}")
-
-# Worker for Speech
 _speech_queue = queue.Queue(maxsize=10)
+_activity = {"last_ts": time.monotonic(), "busy": False}
 DEFAULT_VOICE = "af_heart"
+# Sem falas por esse tempo, a RAM ociosa do backend volta para o Windows.
+IDLE_TRIM_SECONDS = 30.0
 
-def _normalize_lang(lang):
-    aliases = {
-        "en": "a",
-        "en-us": "a",
-        "english": "a",
-        "us": "a",
-        "en-gb": "b",
-        "uk": "b",
-        "british": "b",
-        "es": "e",
-        "spanish": "e",
-        "fr": "f",
-        "french": "f",
-        "hi": "h",
-        "hindi": "h",
-        "it": "i",
-        "italian": "i",
-        "ja": "j",
-        "jp": "j",
-        "japanese": "j",
-        "pt": "p",
-        "pt-br": "p",
-        "portuguese": "p",
-        "zh": "z",
-        "chinese": "z",
-    }
-    key = str(lang or "a").strip().lower()
-    return aliases.get(key, key or "a")
 
-def _make_engine(lang):
-    engine_name = os.environ.get("TTS_ENGINE", "kokoro").lower()
-    if engine_name == "mock":
-        _log("Usando engine mock para testes.")
-        return MockEngine()
-    return KokoroEngine(lang=lang)
+def _touch_activity():
+    _activity["last_ts"] = time.monotonic()
+
 
 def _new_instance_token():
-    """Token que identifica esta instancia do backend.
-
-    Backend orfao segurando a porta 5050 e a principal causa do "jogo ficou
-    mudo": o cliente nao tem como saber com qual instancia esta falando.
-    """
-    import secrets
     return secrets.token_hex(8)
+
+
+def _enqueue_control_item(item, target_queue=None, timeout=0.5):
+    """Enfileira comandos de controle sem travar o leitor de socket em fila cheia."""
+    q = _speech_queue if target_queue is None else target_queue
+    try:
+        q.put(item, timeout=timeout)
+        return True
+    except queue.Full:
+        _log(f"control_queue=full dropped={item[0]}")
+        return False
+
+
+def _handle_stop_command(engine, target_queue=None):
+    """Drena falas pendentes, interrompe sintese/audio em curso e preserva configuracoes."""
+    if target_queue is None:
+        preserved = drain_preserving(_speech_queue)
+        q = _speech_queue
+    else:
+        preserved = drain_preserving(target_queue)
+        q = target_queue
+    # Interrompe de imediato a sintese multi-frase e a fila de audio antes do marcador STOP.
+    if hasattr(engine, "stop"):
+        try:
+            engine.stop()
+        except Exception as err:
+            _log(f"command=STOP engine_stop_error={err}")
+    try:
+        q.put_nowait((CMD_STOP, None))
+    except Exception:
+        pass
+    for item in preserved:
+        try:
+            q.put_nowait(item)
+        except Exception:
+            pass
 
 
 def _preview_text(text, limit=80):
     text = str(text).replace("\n", " ").replace("\r", " ")
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "..."
+    return text if len(text) <= limit else text[:limit] + "..."
+
 
 def _worker(engine, initial_speed, initial_voice):
     speed = initial_speed
     voice = initial_voice or DEFAULT_VOICE
+    trimmed = True  # o engine ja fez o trim depois de carregar
     while True:
         try:
             task = _speech_queue.get(timeout=1)
-            if task is None: break
-            
+            if task is None:
+                break
+
+            trimmed = False
+            _activity["busy"] = True
+            _touch_activity()
             cmd, data = task
             if cmd == "SET_SPEED":
                 speed = data
@@ -169,22 +142,28 @@ def _worker(engine, initial_speed, initial_voice):
                     except Exception as err:
                         _log(f"engine.set_lang error={err}")
             elif cmd == "SPEAK":
-                # LIMPEZA REDUNDANTE PARA APÓSTROFOS (Prevenção Total)
-                # Mesmo que o TextCleaner falhe, limpamos aqui novamente
                 data = str(data)
-                for apo in ['’', '‘', '´', '`', '′', '’']:
+                for apo in ["’", "‘", "´", "`", "′", "’"]:
                     data = data.replace(apo, "'")
-                
-                _log(f"Processando: {data}")
+                _log(f"Processando: {_preview_text(data)}")
                 _log(f"speak voice={voice} text_preview={_preview_text(data)}")
                 engine.speak(data, voice=voice, speed=speed)
             elif cmd == "STOP":
                 engine.stop()
-            
+
+            _activity["busy"] = False
+            _touch_activity()
             _speech_queue.task_done()
         except queue.Empty:
+            idle_for = time.monotonic() - _activity["last_ts"]
+            if not trimmed and not _activity["busy"] and idle_for >= IDLE_TRIM_SECONDS:
+                trimmed = True
+                if trim_working_set():
+                    _log(f"idle_trim after={idle_for:.0f}s")
             continue
         except Exception as e:
+            _activity["busy"] = False
+            _touch_activity()
             _log(f"Erro no worker thread: {e}")
             # A tarefa ja foi retirada da fila: sem o task_done o contador de
             # pendencias cresce a cada falha.
@@ -193,59 +172,58 @@ def _worker(engine, initial_speed, initial_voice):
             except ValueError:
                 pass
 
+
+def _make_engine(lang, config=None):
+    from tts_engines import KokoroEngine, MockEngine
+
+    config = config or {}
+    engine_name = resolve_engine_name(os.environ.get("TTS_ENGINE"), config.get("engine"))
+    if engine_name == "mock":
+        _log("Usando engine mock para testes.")
+        return MockEngine()
+    return KokoroEngine(lang=lang, model=config.get("onnx_model"), g2p=config.get("onnx_g2p"))
+
+
 def main():
     import socket
-    requested_lang = sys.argv[1] if len(sys.argv) > 1 else "a"
+
+    positional = strip_cli_flags(sys.argv[1:])
+    requested_lang = positional[0] if len(positional) > 0 else "a"
     lang = _normalize_lang(requested_lang)
-    voice = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] not in ("", "None") else DEFAULT_VOICE
+    voice = positional[1] if len(positional) > 1 and positional[1] not in ("", "None") else DEFAULT_VOICE
     try:
-        speed = float(sys.argv[3]) if len(sys.argv) > 3 else 1.25
+        speed = float(positional[2]) if len(positional) > 2 else 1.25
     except Exception:
         speed = 1.25
-    host = '127.0.0.1'
-    config_file = os.path.join(here, "tts_config.json")
-    configured_port = None
-    if os.path.isfile(config_file):
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-                if "port" in cfg:
-                    configured_port = int(cfg["port"])
-        except Exception:
-            pass
 
-    cli_port = None
-    for i, arg in enumerate(sys.argv):
-        if arg == "--port" and i + 1 < len(sys.argv):
-            try:
-                cli_port = int(sys.argv[i + 1])
-            except ValueError:
-                pass
+    host = "127.0.0.1"
+    cfg = load_json_config(os.path.join(here, "tts_config.json"))
+    parent_pid = parse_cli_int_flag(sys.argv, "--parent-pid")
+    cli_idle = parse_cli_float_flag(sys.argv, "--idle-timeout")
+    raw_cli_idle = None
+    if "--idle-timeout" in sys.argv:
+        idx = sys.argv.index("--idle-timeout")
+        raw_cli_idle = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
+    idle_timeout = resolve_idle_timeout(
+        cli_idle if cli_idle is not None else raw_cli_idle,
+        os.environ.get("TTS_IDLE_TIMEOUT"),
+    )
+    exit_on_disconnect = has_cli_flag(sys.argv, "--exit-on-disconnect")
+    port = resolve_server_port(sys.argv, os.environ, cfg)
+    engine_name = resolve_engine_name(os.environ.get("TTS_ENGINE"), cfg.get("engine"))
 
-    try:
-        if cli_port is not None:
-            port = cli_port
-        elif "TTS_PORT" in os.environ:
-            port = int(os.environ["TTS_PORT"])
-        elif configured_port is not None:
-            port = configured_port
-        else:
-            port = 5050
-    except Exception:
-        port = 5050
-    engine_name = os.environ.get("TTS_ENGINE", "kokoro").lower()
-    
     _log(f"Iniciando servidor robusto (v2) em {host}:{port}...")
-    _log(f"startup_context engine={engine_name} lang={lang} requested_lang={requested_lang} voice={voice} port={port} speed={speed} log_dir={log_dir}")
+    _log(
+        f"startup_context engine={engine_name} lang={lang} requested_lang={requested_lang} "
+        f"voice={voice} port={port} speed={speed} parent_pid={parent_pid} "
+        f"idle_timeout={idle_timeout} exit_on_disconnect={exit_on_disconnect} log_dir={log_dir}"
+    )
     print(f"--- SERVIDOR TTS KOKORO ONLINE EM {host}:{port} ---")
     print("Aguardando conexao do jogo...")
-    
+
     try:
-        # Socket Server (Bind EARLY to prevent game from spawning duplicate server)
+        # Bind ANTES de importar modulos pesados ou mexer no tts_ready.txt.
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # SO_EXCLUSIVEADDRUSE (Windows) faz o bind falhar quando a porta ja esta
-        # ocupada, em vez de dividi-la silenciosamente com outra instancia.
-        # No POSIX, SO_REUSEADDR e o equivalente correto.
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         else:
@@ -253,35 +231,128 @@ def main():
         try:
             server_sock.bind((host, port))
         except OSError as bind_error:
+            try:
+                server_sock.close()
+            except Exception:
+                pass
             message = (
                 "porta {port} ja esta em uso por outra instancia do backend TTS. "
                 "Feche o backend anterior (ou o jogo anterior) e execute novamente."
             ).format(port=port)
             _log(f"bind_failed port={port} error={bind_error}")
             print("!!! " + message)
-            with open(status_path, "w", encoding="utf-8") as f:
-                f.write("ERROR|" + message)
+            if not status_has_live_ready(status_path):
+                with open(status_path, "w", encoding="utf-8") as f:
+                    f.write("ERROR|" + message)
             return 1
+
+        if os.path.exists(status_path):
+            try:
+                os.remove(status_path)
+            except OSError:
+                pass
+
         server_sock.listen(1)
 
-        engine = _make_engine(lang)
-        
+        # Antes de importar o onnxruntime: poucos nucleos e prioridade abaixo do jogo.
+        cpu_threads = resolve_cpu_threads(os.environ.get("TTS_THREADS"))
+        apply_thread_env_limits(cpu_threads)
+        low_priority = lower_process_priority(os.environ.get("TTS_PRIORITY"))
+        _log(f"lightness cpu_threads={cpu_threads} low_priority={low_priority}")
+
+        from text_cleaner import TextCleaner
+        from tts_engines import get_available_voices
+
+        engine = _make_engine(lang, cfg)
+
         t = threading.Thread(target=_worker, args=(engine, speed, voice), daemon=True)
         t.start()
 
-        # Handshake via arquivo: publica o token da instancia e as vozes.
         instance_token = _new_instance_token()
         voices_list = ",".join(get_available_voices())
         with open(status_path, "w", encoding="utf-8") as f:
             f.write(f"READY|{instance_token}|{voices_list}")
-        
-        _log(f"Servidor pronto.")
+
+        _touch_activity()
+        _log("Servidor pronto.")
         print("Servidor inicializado com sucesso. Pressione Ctrl+C para encerrar.")
 
         active_conn = None
         conn_lock = threading.Lock()
+        shutdown_event = threading.Event()
+        # Fim do _trigger_shutdown. Quando outra thread (ociosidade, pai encerrado)
+        # dispara o desligamento, o main espera por ele antes de retornar: sair
+        # com essa thread ainda em codigo nativo (engine.stop -> PortAudio)
+        # derrubava o processo com 0xC0000005 na finalizacao do Python.
+        shutdown_done = threading.Event()
+
+        def _wait_shutdown_finished():
+            shutdown_done.wait(timeout=5.0)
+
+        def _trigger_shutdown(reason):
+            if shutdown_event.is_set():
+                return
+            try:
+                _shutdown_steps(reason)
+            finally:
+                shutdown_done.set()
+
+        def _shutdown_steps(reason):
+            _log(reason)
+            shutdown_event.set()
+            remove_owned_status(status_path, instance_token)
+            try:
+                engine.stop()
+            except Exception:
+                pass
+            # Acorda o worker para ele sair antes da finalizacao do interpretador.
+            try:
+                _speech_queue.put_nowait(None)
+            except Exception:
+                pass
+            with conn_lock:
+                if active_conn is not None:
+                    # conn.makefile("r") mantem refcount extra no socket: sem SHUT_RDWR,
+                    # active_conn.close() nao desbloqueia f.readline() no Windows.
+                    try:
+                        active_conn.shutdown(socket.SHUT_RDWR)
+                    except Exception:
+                        pass
+                    try:
+                        active_conn.close()
+                    except Exception:
+                        pass
+            try:
+                server_sock.close()
+            except Exception:
+                pass
+
+        if parent_pid and parent_pid > 0:
+            def _watch_parent():
+                while not shutdown_event.is_set():
+                    if not is_pid_alive(parent_pid):
+                        _trigger_shutdown(f"parent_exited pid={parent_pid}")
+                        return
+                    time.sleep(0.4)
+
+            threading.Thread(target=_watch_parent, daemon=True).start()
+
+        if idle_timeout > 0.0:
+            poll_interval = min(0.5, max(0.05, idle_timeout / 4.0))
+
+            def _watch_idle():
+                while not shutdown_event.is_set():
+                    idle_for = time.monotonic() - _activity["last_ts"]
+                    if not _activity["busy"] and _speech_queue.empty() and idle_for >= idle_timeout:
+                        print(f"[*] TTS ocioso por {idle_timeout:.1f}s — hibernando para liberar RAM/VRAM.")
+                        _trigger_shutdown(f"idle_hibernate timeout={idle_timeout}")
+                        return
+                    time.sleep(poll_interval)
+
+            threading.Thread(target=_watch_idle, daemon=True).start()
 
         def on_playback_done():
+            _touch_activity()
             with conn_lock:
                 if active_conn:
                     try:
@@ -290,8 +361,15 @@ def main():
                         pass
         engine.on_playback_done = on_playback_done
 
-        while True:
-            conn, addr = server_sock.accept()
+        while not shutdown_event.is_set():
+            try:
+                conn, addr = server_sock.accept()
+            except OSError:
+                if shutdown_event.is_set():
+                    _wait_shutdown_finished()
+                    return 0
+                raise
+            _touch_activity()
             _log(f"Conectado por {addr}")
             print(f"[*] Jogo conectado: {addr}")
 
@@ -299,50 +377,34 @@ def main():
                 active_conn = conn
 
             with conn:
-                f = conn.makefile('r', encoding='utf-8')
-
                 try:
-                    while True:
-                        line = f.readline()
-                        if not line: break
-                        line = line.strip()
-                        if not line: continue
-
+                    for raw_line in iter_socket_lines(conn, shutdown_event):
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        _touch_activity()
 
                         if line == CMD_STOP:
                             _log("command=STOP")
-                            preserved = drain_preserving(_speech_queue)
-                            try:
-                                _speech_queue.put_nowait((CMD_STOP, None))
-                            except Exception:
-                                pass
-                            for item in preserved:
-                                try:
-                                    _speech_queue.put_nowait(item)
-                                except Exception:
-                                    pass
+                            _handle_stop_command(engine)
                             continue
                         if line == CMD_QUIT:
-                            _log("command=QUIT")
-                            return
+                            _trigger_shutdown("command=QUIT")
+                            return 0
                         if line.startswith(CMD_SET_SPEED + ":"):
                             raw_speed = line[10:].strip()
                             valid_speed = None
                             try:
-                                parsed = float(raw_speed)
                                 import math
-                                if not math.isnan(parsed) and not math.isinf(parsed) and 0.1 <= parsed <= 5.0:
+                                parsed = float(raw_speed)
+                                if not math.isnan(parsed) and not math.isinf(parsed) and 0.1 <= parsed <= 3.0:
                                     valid_speed = parsed
                             except Exception:
                                 pass
-
                             if valid_speed is not None:
                                 speed = valid_speed
                                 _log(f"command=SET_SPEED speed={speed}")
-                                try:
-                                    _speech_queue.put(("SET_SPEED", speed), timeout=0.5)
-                                except Exception:
-                                    pass
+                                _enqueue_control_item(("SET_SPEED", speed))
                             else:
                                 _log(f"command=SET_SPEED ignored=invalid raw={raw_speed}")
                             continue
@@ -351,24 +413,20 @@ def main():
                             if requested_voice:
                                 voice = requested_voice
                                 _log(f"command=SET_VOICE voice={voice}")
-                                _speech_queue.put(("SET_VOICE", voice))
+                                _enqueue_control_item(("SET_VOICE", voice))
                             else:
                                 _log("command=SET_VOICE ignored=empty")
                             continue
                         if line.startswith(CMD_SET_LANG + ":"):
-                            raw_lang = line[9:].strip()
-                            normalized = _normalize_lang(raw_lang)
+                            normalized = _normalize_lang(line[9:].strip())
                             if normalized:
                                 lang = normalized
                                 _log(f"command=SET_LANG lang={lang}")
-                                _speech_queue.put(("SET_LANG", lang))
+                                _enqueue_control_item(("SET_LANG", lang))
                             else:
                                 _log("command=SET_LANG ignored=empty")
                             continue
-
                         if line == CMD_HELLO or line.startswith(CMD_HELLO + ":"):
-                            # Pull, nao push: clientes que nao pedem (ponte Falcom,
-                            # plugin RPG Maker MZ) continuam sem ver linha extra.
                             requested = line[6:].strip() if ":" in line else ""
                             if requested and requested != instance_token:
                                 _log(f"handshake=token_mismatch requested={requested}")
@@ -382,7 +440,7 @@ def main():
 
                         cleaned_text = TextCleaner.clean(line)
                         if cleaned_text:
-                            print(f"\n[TEXTO RECEBIDO] {cleaned_text}")
+                            print(f"\n[TEXTO RECEBIDO] {_preview_text(cleaned_text)}")
                             _log(f"text_preview={_preview_text(cleaned_text)}")
                             try:
                                 _speech_queue.put(("SPEAK", cleaned_text), timeout=1.0)
@@ -396,17 +454,24 @@ def main():
                         else:
                             _log("text_ignored=empty_after_cleaning")
                             print("[!] Texto vazio após limpeza (ignorado)")
-                            # Immediately send PLAYBACK_DONE if we ignore
                             on_playback_done()
                 except Exception as ex:
-                    _log(f"Connection error: {ex}")
+                    if not shutdown_event.is_set():
+                        _log(f"Connection error: {ex}")
                 finally:
                     with conn_lock:
                         if active_conn is conn:
                             active_conn = None
 
-            _log("Conexão encerrada pelo cliente.")
-            print("[!] Jogo desconectado. Aguardando nova conexao...")
+            if not shutdown_event.is_set():
+                if exit_on_disconnect:
+                    print("[*] Jogo encerrado — desligando servidor TTS automaticamente.")
+                    _trigger_shutdown("exit_on_disconnect=true")
+                    return 0
+                _log("Conexão encerrada pelo cliente.")
+                print("[!] Jogo desconectado. Aguardando nova conexao...")
+        _wait_shutdown_finished()
+        return 0
 
     except Exception as e:
         _log(f"ERRO CRÍTICO: {e}")
@@ -415,7 +480,6 @@ def main():
             f.write("ERROR|" + str(e))
         return 1
 
+
 if __name__ == "__main__":
-    # SystemExit(main()) para que o codigo de retorno reflita a falha: sem isso
-    # o backend encerrava com 0 mesmo apos um erro critico (ex.: porta ocupada).
     raise SystemExit(main())

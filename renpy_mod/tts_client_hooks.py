@@ -19,6 +19,79 @@ def extract_callback_text(kwargs):
     return None
 
 
+def current_say_text(kwargs, store=None):
+    """Texto da linha que o jogo esta exibindo agora.
+
+    O callback ``all_character_callbacks`` do Ren'Py 7 nao entrega o texto da
+    fala: os argumentos extras vem de ``Character.cb_args``, que fica vazio
+    quando o personagem nao define propriedades ``cb``. Por isso a linha atual
+    precisa ser lida de ``renpy.store._last_say_what``, que o Ren'Py grava
+    logo antes de chamar o ``say``.
+    """
+    return resolve_say_text(kwargs, None, store)
+
+
+def resolve_say_text(kwargs, captured=None, store=None):
+    """Texto da fala atual, com as fontes em ordem de confianca.
+
+    ``captured`` e o texto registrado por ``install_say_capture`` no momento
+    em que o jogo enviou a linha; ``store`` e o ``renpy.store``, usado como
+    ultimo recurso.
+    """
+    text = extract_callback_text(kwargs)
+    if text:
+        return text
+    if captured:
+        return captured
+    if store is not None:
+        return getattr(store, "_last_say_what", None)
+    return None
+
+
+def current_say_who(kwargs, store=None):
+    """Locutor da linha atual, pela mesma regra de ``current_say_text``."""
+    return resolve_say_who(kwargs, None, store)
+
+
+def resolve_say_who(kwargs, captured=None, store=None):
+    """Locutor da fala atual, com as fontes em ordem de confianca."""
+    who = (kwargs or {}).get("who")
+    if who:
+        return who
+    if captured:
+        return captured
+    if store is not None:
+        return getattr(store, "_last_say_who", None)
+    return None
+
+
+def install_say_capture(state, renpy_api):
+    """Registra o texto e o locutor da fala no momento em que o jogo a envia.
+
+    O callback de personagem do Ren'Py 7 nao recebe o texto da linha, e
+    ``renpy.store._last_say_what`` so e atualizado pelos statements ``say``
+    do script. Envolver ``renpy.exports.say`` garante o texto exato de
+    qualquer fala, inclusive as que vem de Python.
+    """
+    try:
+        exports = getattr(renpy_api, "exports", None)
+        original = getattr(exports, "say", None)
+        if original is None or getattr(original, "_tts_wrapped", False):
+            return False
+
+        def patched(who, what, *args, **kwargs):
+            state.last_say_who = who
+            state.last_say_what = what
+            state.last_spoken = None
+            return original(who, what, *args, **kwargs)
+
+        patched._tts_wrapped = True
+        exports.say = patched
+        return True
+    except Exception:
+        return False
+
+
 def wrap_phone_callback(original, on_text):
     """Envolve um callback de personagem para que ele fale o texto."""
 

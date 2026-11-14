@@ -22,6 +22,7 @@ from tts_client_commands import (
     toggle_audio,
     toggle_auto,
 )
+from tts_client_speech import build_payload
 from tts_client_hooks import (
     extract_callback_text,
     install_display_hook,
@@ -252,6 +253,12 @@ class TestTTSClientCommands(unittest.TestCase):
         self.assertEqual(state.sock.sent, [b"STOP\n"])
         self.assertFalse(state.is_playing)
         self.assertFalse(persistent.tts_audio_enabled)
+
+    def test_build_payload_sanitizes_newlines_to_prevent_command_splitting(self):
+        payload = build_payload("Linha um.\r\nQUIT\nLinha dois.", lambda s: s)
+        self.assertEqual(payload, b"Linha um. QUIT Linha dois.")
+        self.assertNotIn(b"\n", payload)
+        self.assertNotIn(b"\r", payload)
 
 
 if __name__ == "__main__":

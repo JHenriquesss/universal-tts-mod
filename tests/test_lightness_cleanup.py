@@ -33,7 +33,7 @@ class TestKokoroOnlyLightnessCleanup(unittest.TestCase):
     def test_mock_engine_is_test_only_by_environment_switch(self):
         server = read_project_file("renpy_mod", "tts_server.py")
 
-        self.assertIn('os.environ.get("TTS_ENGINE", "kokoro")', server)
+        self.assertIn('resolve_engine_name(os.environ.get("TTS_ENGINE")', server)
         self.assertIn('engine_name == "mock"', server)
         self.assertIn("return KokoroEngine", server)
 
@@ -130,29 +130,38 @@ class TestKokoroOnlyLightnessCleanup(unittest.TestCase):
             "tooling scripts must not hardcode a personal home path: {}".format(offenders),
         )
 
-    def test_qwen_voice_spike_stays_an_experiment(self):
-        """qwen_voice_pro/ e um experimento, nao uma dependencia do mod.
+    def test_heavy_ml_dependencies_stay_out_of_the_mod(self):
+        """O backend roda o Kokoro no ONNX Runtime: nada de PyTorch no mod.
 
-        O script descreve uma voz com um modelo de 7B parametros, e o
-        resultado so serve para sistemas de clonagem que o projeto nao
-        integra. Se o experimento entrar nas dependencias, no CI ou no
-        instalador, o mod passa a carregar um peso que ninguem usa.
+        O motor PyTorch e o antigo spike qwen_voice_pro (modelo de 7B) foram
+        removidos. Se algo assim voltar para as dependencias ou o instalador, o
+        backend passa a carregar gigabytes que ninguem usa.
         """
-        readme = read_project_file("qwen_voice_pro", "README.md").lower()
-        requirements = read_project_file("requirements.txt").lower()
-        workflow = read_project_file(".github", "workflows", "ci.yml").lower()
-        installer = read_project_file("instalar.bat").lower()
+        import re
 
-        self.assertIn(
-            "spike",
-            readme,
-            "the experiment must be labelled as a spike, not as a feature",
+        # So as linhas de pacote: os comentarios podem explicar o que ficou de fora.
+        requirements = "\n".join(
+            line.split("#", 1)[0].strip()
+            for line in read_project_file("requirements.txt").lower().splitlines()
         )
-        for heavy_dependency in ("torch", "transformers", "accelerate", "bitsandbytes"):
+        installer = read_project_file("instalar.bat").lower()
+        heavy =("torch", "transformers", "accelerate", "bitsandbytes", "misaki[en]")
+
+        for heavy_dependency in heavy:
             self.assertNotIn(heavy_dependency, requirements)
-            self.assertNotIn(heavy_dependency, installer)
-        self.assertNotIn("qwen_voice_pro", workflow)
-        self.assertNotIn("qwen_voice_pro", installer)
+        # O pacote "kokoro" (PyTorch) nao pode voltar; "kokoro-onnx" e o motor atual.
+        self.assertIsNone(re.search(r"(?m)^kokoro\b(?!-onnx)", requirements))
+        # Linhas que definem ou instalam pacotes (``pip uninstall`` cita o que remove).
+        install_lines = [
+            line for line in installer.splitlines()
+            if (" install " in line or "tts_packages=" in line) and "uninstall" not in line
+        ]
+        self.assertTrue(any("onnxruntime" in line for line in install_lines))
+        for line in install_lines:
+            for heavy_dependency in heavy:
+                self.assertNotIn(heavy_dependency, line)
+            self.assertIsNone(re.search(r"\bkokoro\b(?!-onnx)", line), line)
+        self.assertFalse(os.path.exists(os.path.join(ROOT_DIR, "qwen_voice_pro")))
 
     def test_docs_do_not_claim_removed_runtime_protocols(self):
         readme = read_project_file("README.md")

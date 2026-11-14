@@ -24,6 +24,12 @@ if exist "%~dp0.venv\Scripts\python.exe" (
     goto :finished
 )
 
+set "TTS_RUNTIME_PY=%LOCALAPPDATA%\UniversalKokoroTTS\runtime\Scripts\python.exe"
+if exist "%TTS_RUNTIME_PY%" (
+    "%TTS_RUNTIME_PY%" "%~dp0falcom_launcher.py" %*
+    goto :finished
+)
+
 set "PYTHON312=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 if exist "%PYTHON312%" (
     "%PYTHON312%" "%~dp0falcom_launcher.py" %*

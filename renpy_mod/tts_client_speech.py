@@ -11,6 +11,11 @@ import sys
 import time
 
 
+def _normalize_single_line(text):
+    """Colapsa quebras de linha para evitar divisao/injecao de comandos no socket."""
+    return " ".join(part.strip() for part in text.splitlines() if part.strip())
+
+
 def build_payload(text, substitute):
     """Texto final da fala, ja interpolado e pronto para o socket."""
     if sys.version_info[0] == 2:
@@ -19,14 +24,14 @@ def build_payload(text, substitute):
             text_value = text.encode("utf-8")
         else:
             text_value = str(text)
-        return substitute(text_value)
+        return _normalize_single_line(substitute(text_value))
 
     # Python 3 (Ren'Py 8)
     text_value = str(text)
     interpolated = substitute(text_value)
     if isinstance(interpolated, str):
-        return interpolated.encode("utf-8")
-    return interpolated
+        return _normalize_single_line(interpolated).encode("utf-8")
+    return _normalize_single_line(interpolated.decode("utf-8", "replace")).encode("utf-8")
 
 
 def speak(state, text, voice, default_voice, substitute, notify):
