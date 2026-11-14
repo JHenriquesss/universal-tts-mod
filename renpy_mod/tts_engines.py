@@ -4,14 +4,38 @@ import os
 import sys
 import time
 
-from tts_protocol import append_bounded_log, resolve_cpu_threads, trim_working_set
+from tts_onnx_pipeline import (
+    DEFAULT_KOKORO_VOICE,
+    ESPEAK_LANGS,
+    ONNX_DIR_PARTS,
+    ONNX_G2P_MODES,
+    ONNX_MODEL_FILES,
+    ONNX_SPEED_RANGE,
+    ONNX_VOICES_FILE,
+    OnnxPipeline,
+    _import_misaki,
+    _log_engine,
+    _make_misaki_g2p,
+    resolve_onnx_dir,
+    resolve_onnx_options,
+)
+from tts_protocol import trim_working_set
 
-# Configurações de vozes padrão
+# Vozes padrao suportadas pelo Kokoro ONNX v1.0
 DEFAULT_VOICE_MAP = {
-    "af_heart": "en-US-EmmaMultilingualNeural",
-    "am_adam": "en-US-AndrewMultilingualNeural",
-    "ef_dora": "es-ES-ElviraNeural",
-    "pt_br": "pt-BR-FranciscaNeural"
+    "af_heart": "af_heart",
+    "af_bella": "af_bella",
+    "af_sarah": "af_sarah",
+    "af_sky": "af_sky",
+    "af_nicole": "af_nicole",
+    "af_aoede": "af_aoede",
+    "am_adam": "am_adam",
+    "am_onyx": "am_onyx",
+    "am_eric": "am_eric",
+    "am_michael": "am_michael",
+    "ef_dora": "ef_dora",
+    "pf_dora": "pf_dora",
+    "pm_alex": "pm_alex",
 }
 DEFAULT_KOKORO_VOICE = "af_heart"
 
@@ -29,11 +53,6 @@ _REGISTERED_CACHE_DIRS = set()
 
 def get_available_voices():
     return list(DEFAULT_VOICE_MAP.keys())
-
-
-def _log_engine(msg):
-    tld = os.environ.get("TTS_LOG_DIR") or os.path.dirname(os.path.abspath(__file__))
-    append_bounded_log(os.path.join(tld, "tts_server.log"), f"[ENGINE] {msg}")
 
 
 def clear_cache_dir(cache_dir, remove_dir_if_empty=False):
@@ -116,158 +135,6 @@ class TTSEngine(abc.ABC):
             sd.stop()
         except Exception:
             pass
-
-
-# --- Kokoro-82M no ONNX Runtime -----------------------------------------------
-# O modelo roda no ONNX Runtime, sem PyTorch no processo: o backend carrega mais
-# rapido e usa bem menos memoria. A pronuncia em ingles vem do misaki, o mesmo
-# conversor do pacote kokoro original.
-
-ONNX_DIR_PARTS = ("UniversalKokoroTTS", "onnx")
-ONNX_MODEL_FILES = {"int8": "kokoro-v1.0.int8.onnx", "fp32": "kokoro-v1.0.onnx"}
-ONNX_VOICES_FILE = "voices-v1.0.bin"
-ONNX_G2P_MODES = ("misaki", "espeak")
-ONNX_SPEED_RANGE = (0.5, 2.0)
-# Lang code do kokoro -> idioma do espeak-ng (fallback quando nao ha misaki).
-ESPEAK_LANGS = {
-    "a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "h": "hi",
-    "i": "it", "p": "pt-br", "j": "ja", "z": "cmn",
-}
-
-
-def resolve_onnx_dir(environ=None):
-    env = os.environ if environ is None else environ
-    custom = str(env.get("TTS_ONNX_DIR", "")).strip()
-    if custom:
-        return custom
-    return os.path.join(env.get("LOCALAPPDATA", os.path.expanduser("~")), *ONNX_DIR_PARTS)
-
-
-def resolve_onnx_options(model=None, g2p=None):
-    """Variante do modelo e modo de pronuncia.
-
-    fp32 por padrao porque e o peso original do modelo. O int8 usa ~200 MB a
-    menos de RAM, mas perde um pouco de fidelidade.
-    """
-    model_key = str(model or os.environ.get("TTS_ONNX_MODEL") or "fp32").strip().lower()
-    if model_key not in ONNX_MODEL_FILES:
-        model_key = "fp32"
-    g2p_key = str(g2p or os.environ.get("TTS_ONNX_G2P") or "misaki").strip().lower()
-    if g2p_key not in ONNX_G2P_MODES:
-        g2p_key = "misaki"
-    return model_key, g2p_key
-
-
-def _import_misaki():
-    """Importa o misaki mantendo o torch fora do processo.
-
-    Quando o backend cai num Python global que tem o torch, o spacy (usado pelo
-    misaki) o puxaria sem uso (~200 MB). Se algum plugin do spacy exigir o torch
-    de verdade, o import e refeito com o torch liberado.
-    """
-    blocked = "torch" not in sys.modules
-    if blocked:
-        sys.modules["torch"] = None
-    try:
-        from misaki import en, espeak
-        return en, espeak
-    except ImportError:
-        if not blocked:
-            raise
-    finally:
-        if blocked and sys.modules.get("torch", 0) is None:
-            del sys.modules["torch"]
-    for name in [n for n in sys.modules if n == "spacy" or n.startswith(("spacy.", "spacy_", "thinc", "misaki"))]:
-        del sys.modules[name]
-    _log_engine("spacy exigiu o torch: misaki carregado com o torch no processo.")
-    from misaki import en, espeak
-    return en, espeak
-
-
-def _make_misaki_g2p(lang):
-    if lang not in ("a", "b"):
-        return None
-    en, espeak = _import_misaki()
-    british = lang == "b"
-    try:
-        fallback = espeak.EspeakFallback(british=british)
-    except Exception as exc:
-        _log_engine(f"EspeakFallback indisponivel: {exc}")
-        fallback = None
-    return en.G2P(trf=False, british=british, fallback=fallback, unk="")
-
-
-class OnnxPipeline(object):
-    """Gera o audio frase a frase: ``pipeline(text, voice, speed, split_pattern)``."""
-
-    def __init__(self, lang="a", model="fp32", g2p="misaki", onnx_dir=None):
-        import re
-        import numpy as np
-        import onnxruntime as rt
-        from kokoro_onnx import Kokoro
-
-        self._re = re
-        self._np = np
-        onnx_dir = onnx_dir or resolve_onnx_dir()
-        model_path = os.path.join(onnx_dir, ONNX_MODEL_FILES[model])
-        voices_path = os.path.join(onnx_dir, ONNX_VOICES_FILE)
-        for path in (model_path, voices_path):
-            if not os.path.isfile(path):
-                raise FileNotFoundError(
-                    f"Arquivo do modelo Kokoro ausente: {path}. Rode o instalar.bat para baixar o modelo."
-                )
-
-        options = rt.SessionOptions()
-        options.intra_op_num_threads = resolve_cpu_threads(os.environ.get("TTS_THREADS"))
-        options.inter_op_num_threads = 1
-        session = rt.InferenceSession(model_path, sess_options=options, providers=["CPUExecutionProvider"])
-        self.kokoro = Kokoro.from_session(session, voices_path)
-        self.model = model
-        self.g2p_mode = g2p
-        self.lang = None
-        self.g2p = None
-        self._voice_cache = {}
-        self.set_lang(lang)
-
-    def set_lang(self, lang):
-        self.lang = lang
-        self.g2p = _make_misaki_g2p(lang) if self.g2p_mode == "misaki" else None
-
-    def _voice_style(self, voice):
-        style = self._voice_cache.get(voice)
-        if style is None:
-            names = [name.strip() for name in str(voice).split(",") if name.strip()]
-            available = [name for name in names if name in self.kokoro.voices]
-            if not available:
-                available = [DEFAULT_KOKORO_VOICE]
-            # Voz composta ("af_heart,af_bella") e a media dos estilos.
-            style = self._np.mean([self.kokoro.get_voice_style(name) for name in available], axis=0)
-            self._voice_cache[voice] = style
-        return style
-
-    def _sentence_audio(self, sentence, style, speed):
-        if self.g2p is not None:
-            phonemes, _tokens = self.g2p(sentence)
-            if not phonemes or not phonemes.strip():
-                return None
-            audio, _sr = self.kokoro.create(phonemes, voice=style, speed=speed, is_phonemes=True, trim=False)
-        else:
-            lang = ESPEAK_LANGS.get(self.lang, "en-us")
-            audio, _sr = self.kokoro.create(sentence, voice=style, speed=speed, lang=lang, trim=False)
-        return audio
-
-    def __call__(self, text, voice=None, speed=1.0, split_pattern=r"(?<=[.!?])\s+"):
-        style = self._voice_style(voice or DEFAULT_KOKORO_VOICE)
-        low, high = ONNX_SPEED_RANGE
-        speed = min(high, max(low, float(speed)))
-        parts = self._re.split(split_pattern, text) if split_pattern else [text]
-        for sentence in parts:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-            audio = self._sentence_audio(sentence, style, speed)
-            if audio is not None and len(audio):
-                yield sentence, None, audio
 
 
 class KokoroEngine(TTSEngine):
@@ -528,12 +395,16 @@ class KokoroEngine(TTSEngine):
                     collected_chunks.append(audio_np)
                 count += 1
 
+            if self.stop_flag:
+                print(f"[STOP] Geracao interrompida ({count} segmentos antes do STOP)")
+                return False
+
             self.audio_queue.put("FINISH_MARKER")
             elapsed = time.time() - start_time
             print(f"[OK] Geracao concluida em {elapsed:.2f}s ({count} segmentos)")
 
             # Salvar no cache se geração concluiu com sucesso
-            if not self.stop_flag and collected_chunks:
+            if collected_chunks:
                 full_audio = np.concatenate(collected_chunks)
                 self._save_to_cache(cache_key, full_audio)
 

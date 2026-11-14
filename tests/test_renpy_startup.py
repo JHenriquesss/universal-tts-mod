@@ -27,6 +27,10 @@ class TestRenpyStartupSafety(unittest.TestCase):
             init_body,
             "auto-connect must be deferred; calling tts_connect during init can crash renpy.notify",
         )
+        self.assertIsNone(
+            re.search(r"^\s+tts_start_callback\(\)\s*$", init_body, re.M),
+            "tts_start_callback must stay deferred to start_callbacks, not executed inside init",
+        )
         self.assertIn(
             "config.start_callbacks.append",
             source,
@@ -168,7 +172,7 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
         self.assertIn('"--parent-pid"', body)
         self.assertIn("os.getpid()", body)
 
-    def _exec_client_namespace(self, tmpdir):
+    def _exec_client_namespace(self, tmpdir, run_start_callbacks=True):
         import types
         from tests.test_tts_client_layout import _python_blocks
 
@@ -210,7 +214,117 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
             "Action": object,
         }
         exec(blocks[0], ns)
+        if run_start_callbacks:
+            for callback in fake_config.start_callbacks:
+                callback()
         return ns
+
+    def test_init_execution_defers_backend_spawn_to_start_callback(self):
+        import tempfile
+        from unittest import mock
+
+        spawned = []
+
+        class RefusingSocket:
+            def settimeout(self, t):
+                pass
+            def connect(self, addr):
+                raise ConnectionRefusedError("offline")
+            def close(self):
+                pass
+
+        class InertThread:
+            def __init__(self, target=None, args=(), daemon=None):
+                pass
+            def start(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                mock.patch("subprocess.Popen", side_effect=lambda cmd, **kw: spawned.append(list(cmd))), \
+                mock.patch("socket.socket", return_value=RefusingSocket()), \
+                mock.patch("threading.Thread", InertThread), \
+                mock.patch("time.sleep"):
+            ns = self._exec_client_namespace(tmpdir, run_start_callbacks=False)
+            self.assertEqual(spawned, [], "init block must not spawn backend or open sockets")
+            for callback in ns["config"].start_callbacks:
+                callback()
+            self.assertEqual(len(spawned), 1)
+
+    def test_listener_closes_makefile_and_uses_shutdown_on_token_mismatch(self):
+        import io
+        import tempfile
+        from unittest import mock
+
+        events = []
+
+        class FakeReader(io.StringIO):
+            def close(self):
+                events.append("reader_close")
+                super().close()
+
+        class FakeExternalSock:
+            def __init__(self):
+                self.sent = []
+            def settimeout(self, t):
+                pass
+            def connect(self, addr):
+                pass
+            def sendall(self, data):
+                self.sent.append(data)
+            def makefile(self, mode="r"):
+                return FakeReader("HELLO:other-game-token\n")
+            def shutdown(self, how):
+                events.append(("shutdown", how))
+            def close(self):
+                events.append("sock_close")
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                mock.patch("socket.socket", return_value=FakeExternalSock()), \
+                mock.patch("threading.Thread") as thread_cls:
+            ns = self._exec_client_namespace(tmpdir, run_start_callbacks=False)
+            ready_path = os.path.join(tmpdir, "tts_ready.txt")
+            with open(ready_path, "w", encoding="utf-8") as handle:
+                handle.write("READY|expected-local-token\n")
+            ns["tts_state"].pending_speech = ("Wait for hello", "af_heart")
+
+            fake_sock = FakeExternalSock()
+            with mock.patch("socket.socket", return_value=fake_sock):
+                thread_cls.return_value.start = lambda: None
+                ns["tts_connect"](True)
+
+            # While listener hasn't verified HELLO yet, pending_speech must NOT be flushed prematurely
+            self.assertIsNotNone(ns["tts_state"].pending_speech)
+            ns["_tts_socket_listener"](fake_sock)
+
+            self.assertIn("reader_close", events)
+            self.assertIn("sock_close", events)
+            self.assertTrue(any(isinstance(e, tuple) and e[0] == "shutdown" for e in events))
+            self.assertTrue(ns["tts_state"].stale_backend)
+
+    def test_callback_speaks_identical_consecutive_lines_and_clears_captured_say(self):
+        import tempfile
+        from unittest import mock
+
+        sent = []
+
+        class FakeSock:
+            def sendall(self, data):
+                sent.append(data)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ns = self._exec_client_namespace(tmpdir, run_start_callbacks=False)
+            ns["tts_state"].sock = FakeSock()
+            ns["tts_state"].last_say_who = "Alice"
+            ns["tts_state"].last_say_what = "Yes."
+
+            ns["_tts_callback"]("begin", what="Yes.", who="Alice")
+            self.assertIsNone(ns["tts_state"].last_say_what)
+            self.assertIsNone(ns["tts_state"].last_say_who)
+            ns["_tts_callback"]("end")
+            ns["_tts_callback"]("begin", what="Yes.", who="Alice")
+
+            spoken_lines = [p for p in sent if p == b"Yes.\n"]
+            self.assertEqual(len(spoken_lines), 2)
 
     def test_concurrent_connect_calls_do_not_double_spawn_warming_backend(self):
         import tempfile

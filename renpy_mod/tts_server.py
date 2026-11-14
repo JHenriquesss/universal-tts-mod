@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import io
 import json
 import os
 import queue
@@ -29,10 +28,12 @@ from tts_protocol import (  # noqa: E402
     CMD_STOP,
     append_bounded_log,
     apply_thread_env_limits,
+    configure_windows_stdin_utf8,
     drain_preserving,
     has_cli_flag,
     is_pid_alive,
     iter_socket_lines,
+    load_json_config,
     lower_process_priority,
     normalize_lang_code as _normalize_lang,
     parse_cli_float_flag,
@@ -41,6 +42,8 @@ from tts_protocol import (  # noqa: E402
     resolve_cpu_threads,
     resolve_engine_name,
     resolve_idle_timeout,
+    resolve_server_port,
+    setup_stream_logger,
     status_has_live_ready,
     strip_cli_flags,
     trim_working_set,
@@ -54,43 +57,8 @@ def _log(msg):
         pass
 
 
-def setup_logger():
-    class Logger(object):
-        def __init__(self, original_stream):
-            self.original_stream = original_stream
-
-        def write(self, message):
-            if message.strip():
-                _log(f"{message.strip()}")
-                if self.original_stream:
-                    try:
-                        self.original_stream.write(message)
-                        self.original_stream.flush()
-                    except Exception:
-                        pass
-
-        def flush(self):
-            if self.original_stream:
-                try:
-                    self.original_stream.flush()
-                except Exception:
-                    pass
-
-    orig_stdout, orig_stderr = sys.stdout, sys.stderr
-    sys.stdout = Logger(sys.__stdout__ if sys.__stdout__ else orig_stdout)
-    sys.stderr = Logger(sys.__stderr__ if sys.__stderr__ else orig_stderr)
-
-
-if sys.platform == "win32":
-    try:
-        if hasattr(sys.stdin, "buffer") and sys.stdin.buffer is not None:
-            sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
-        elif hasattr(sys, "__stdin__") and sys.__stdin__ is not None and hasattr(sys.__stdin__, "buffer"):
-            sys.stdin = io.TextIOWrapper(sys.__stdin__.buffer, encoding="utf-8", errors="replace")
-    except Exception as e:
-        _log(f"Aviso: Não foi possível reconfigurar stdin: {e}")
-
-setup_logger()
+configure_windows_stdin_utf8(_log)
+setup_stream_logger(_log)
 
 _speech_queue = queue.Queue(maxsize=10)
 _activity = {"last_ts": time.monotonic(), "busy": False}
@@ -105,6 +73,42 @@ def _touch_activity():
 
 def _new_instance_token():
     return secrets.token_hex(8)
+
+
+def _enqueue_control_item(item, target_queue=None, timeout=0.5):
+    """Enfileira comandos de controle sem travar o leitor de socket em fila cheia."""
+    q = _speech_queue if target_queue is None else target_queue
+    try:
+        q.put(item, timeout=timeout)
+        return True
+    except queue.Full:
+        _log(f"control_queue=full dropped={item[0]}")
+        return False
+
+
+def _handle_stop_command(engine, target_queue=None):
+    """Drena falas pendentes, interrompe sintese/audio em curso e preserva configuracoes."""
+    if target_queue is None:
+        preserved = drain_preserving(_speech_queue)
+        q = _speech_queue
+    else:
+        preserved = drain_preserving(target_queue)
+        q = target_queue
+    # Interrompe de imediato a sintese multi-frase e a fila de audio antes do marcador STOP.
+    if hasattr(engine, "stop"):
+        try:
+            engine.stop()
+        except Exception as err:
+            _log(f"command=STOP engine_stop_error={err}")
+    try:
+        q.put_nowait((CMD_STOP, None))
+    except Exception:
+        pass
+    for item in preserved:
+        try:
+            q.put_nowait(item)
+        except Exception:
+            pass
 
 
 def _preview_text(text, limit=80):
@@ -193,20 +197,7 @@ def main():
         speed = 1.25
 
     host = "127.0.0.1"
-    config_file = os.path.join(here, "tts_config.json")
-    configured_port = None
-    cfg = {}
-    if os.path.isfile(config_file):
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-            cfg = loaded if isinstance(loaded, dict) else {}
-            if "port" in cfg:
-                configured_port = int(cfg["port"])
-        except Exception:
-            pass
-
-    cli_port = parse_cli_int_flag(sys.argv, "--port")
+    cfg = load_json_config(os.path.join(here, "tts_config.json"))
     parent_pid = parse_cli_int_flag(sys.argv, "--parent-pid")
     cli_idle = parse_cli_float_flag(sys.argv, "--idle-timeout")
     raw_cli_idle = None
@@ -218,18 +209,7 @@ def main():
         os.environ.get("TTS_IDLE_TIMEOUT"),
     )
     exit_on_disconnect = has_cli_flag(sys.argv, "--exit-on-disconnect")
-
-    try:
-        if cli_port is not None:
-            port = cli_port
-        elif "TTS_PORT" in os.environ:
-            port = int(os.environ["TTS_PORT"])
-        elif configured_port is not None:
-            port = configured_port
-        else:
-            port = 5050
-    except Exception:
-        port = 5050
+    port = resolve_server_port(sys.argv, os.environ, cfg)
     engine_name = resolve_engine_name(os.environ.get("TTS_ENGINE"), cfg.get("engine"))
 
     _log(f"Iniciando servidor robusto (v2) em {host}:{port}...")
@@ -406,16 +386,7 @@ def main():
 
                         if line == CMD_STOP:
                             _log("command=STOP")
-                            preserved = drain_preserving(_speech_queue)
-                            try:
-                                _speech_queue.put_nowait((CMD_STOP, None))
-                            except Exception:
-                                pass
-                            for item in preserved:
-                                try:
-                                    _speech_queue.put_nowait(item)
-                                except Exception:
-                                    pass
+                            _handle_stop_command(engine)
                             continue
                         if line == CMD_QUIT:
                             _trigger_shutdown("command=QUIT")
@@ -426,17 +397,14 @@ def main():
                             try:
                                 import math
                                 parsed = float(raw_speed)
-                                if not math.isnan(parsed) and not math.isinf(parsed) and 0.1 <= parsed <= 5.0:
+                                if not math.isnan(parsed) and not math.isinf(parsed) and 0.1 <= parsed <= 3.0:
                                     valid_speed = parsed
                             except Exception:
                                 pass
                             if valid_speed is not None:
                                 speed = valid_speed
                                 _log(f"command=SET_SPEED speed={speed}")
-                                try:
-                                    _speech_queue.put(("SET_SPEED", speed), timeout=0.5)
-                                except Exception:
-                                    pass
+                                _enqueue_control_item(("SET_SPEED", speed))
                             else:
                                 _log(f"command=SET_SPEED ignored=invalid raw={raw_speed}")
                             continue
@@ -445,7 +413,7 @@ def main():
                             if requested_voice:
                                 voice = requested_voice
                                 _log(f"command=SET_VOICE voice={voice}")
-                                _speech_queue.put(("SET_VOICE", voice))
+                                _enqueue_control_item(("SET_VOICE", voice))
                             else:
                                 _log("command=SET_VOICE ignored=empty")
                             continue
@@ -454,7 +422,7 @@ def main():
                             if normalized:
                                 lang = normalized
                                 _log(f"command=SET_LANG lang={lang}")
-                                _speech_queue.put(("SET_LANG", lang))
+                                _enqueue_control_item(("SET_LANG", lang))
                             else:
                                 _log("command=SET_LANG ignored=empty")
                             continue

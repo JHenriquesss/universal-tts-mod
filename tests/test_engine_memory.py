@@ -202,6 +202,37 @@ class EphemeralCacheLifecycleTest(EngineTestBase):
         keys = {e._get_cache_key("Same line.", "af_heart", 1.0) for e in (fp32, int8, espeak)}
         self.assertEqual(len(keys), 3)
 
+    def test_stop_during_kokoro_synthesis_omits_finish_marker(self):
+        import numpy as np
+
+        engine, _ = self._make()
+        engine._start_player = lambda: None
+        queued = []
+        engine.audio_queue.put = queued.append
+
+        def interrupting_pipeline(text, voice=None, speed=1.0, split_pattern=None):
+            yield ("g", "p", np.ones(4, dtype=np.float32))
+            engine.stop()
+            yield ("g", "p", np.ones(4, dtype=np.float32))
+
+        engine.pipeline = interrupting_pipeline
+        completed = engine.speak("Sentence one. Sentence two.", voice="af_heart", speed=1.0)
+
+        self.assertFalse(completed)
+        string_markers = [item for item in queued if isinstance(item, str)]
+        self.assertNotIn("FINISH_MARKER", string_markers)
+        self.assertEqual([f for f in os.listdir(engine.cache_dir) if f.endswith(".npy")], [])
+
+    def test_default_voices_are_valid_kokoro_ids(self):
+        voices = tts_engines.get_available_voices()
+        self.assertIn("af_heart", voices)
+        self.assertIn("pf_dora", voices)
+        self.assertNotIn("pt_br", voices)
+        self.assertFalse(
+            any("Neural" in str(v) for v in tts_engines.DEFAULT_VOICE_MAP.values()),
+            f"Legacy Edge-TTS voices still present: {tts_engines.DEFAULT_VOICE_MAP}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ processo pai possam ser testadas de forma deterministica sem subir um backend.
 import json
 import math
 import os
+import sys
 import time
 
 # Comandos enviados pelo cliente ao backend.
@@ -343,3 +344,75 @@ def resolve_engine_name(env_value=None, config_value=None):
         if str(value or "").strip().lower() == "mock":
             return "mock"
     return "kokoro"
+
+
+def setup_stream_logger(log_fn):
+    """Espelha stdout/stderr no log rotativo sem perder os streams do processo."""
+
+    class _StreamLogger(object):
+        def __init__(self, original_stream):
+            self.original_stream = original_stream
+
+        def write(self, message):
+            if message.strip():
+                log_fn(f"{message.strip()}")
+                if self.original_stream:
+                    try:
+                        self.original_stream.write(message)
+                        self.original_stream.flush()
+                    except Exception:
+                        pass
+
+        def flush(self):
+            if self.original_stream:
+                try:
+                    self.original_stream.flush()
+                except Exception:
+                    pass
+
+    orig_stdout, orig_stderr = sys.stdout, sys.stderr
+    sys.stdout = _StreamLogger(sys.__stdout__ if sys.__stdout__ else orig_stdout)
+    sys.stderr = _StreamLogger(sys.__stderr__ if sys.__stderr__ else orig_stderr)
+
+
+def configure_windows_stdin_utf8(log_fn):
+    """Forca stdin em UTF-8 no Windows para caracteres acentuados no console."""
+    if sys.platform != "win32":
+        return
+    import io
+
+    try:
+        if hasattr(sys.stdin, "buffer") and sys.stdin.buffer is not None:
+            sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+        elif hasattr(sys, "__stdin__") and sys.__stdin__ is not None and hasattr(sys.__stdin__, "buffer"):
+            sys.stdin = io.TextIOWrapper(sys.__stdin__.buffer, encoding="utf-8", errors="replace")
+    except Exception as exc:
+        log_fn(f"Aviso: Nao foi possivel reconfigurar stdin: {exc}")
+
+
+def load_json_config(config_path):
+    """Carrega dicionario de configuracao JSON sem falhar se ausente ou invalido."""
+    import json
+
+    if not os.path.isfile(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def resolve_server_port(argv, environ, cfg, default_port=5050):
+    """Ordem de precedencia da porta TCP: --port > TTS_PORT > tts_config.json > padrao."""
+    cli_port = parse_cli_int_flag(argv, "--port")
+    if cli_port is not None:
+        return cli_port
+    for candidate in (environ.get("TTS_PORT"), cfg.get("port")):
+        if candidate is not None:
+            try:
+                return int(candidate)
+            except (TypeError, ValueError):
+                pass
+    return default_port

@@ -232,6 +232,47 @@ class TestInstallTTSMod(unittest.TestCase):
                 content = f.read()
             self.assertIn('TTS_VOICE = "am_onyx"', content)
 
+    def test_install_direct_game_root_does_not_create_launchers_in_parent_folder(self):
+        from install_tts_mod import install_game
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            collection_dir = os.path.join(tmpdir, "VisualNovels")
+            game_root = os.path.join(collection_dir, "MyGame")
+            game_dir = os.path.join(game_root, "game")
+            os.makedirs(game_dir, exist_ok=True)
+            with open(os.path.join(game_root, "MyGame.exe"), "wb") as f:
+                f.write(b"MZ")
+            with open(os.path.join(game_dir, "scripts.rpa"), "wb") as f:
+                f.write(b"RPA-3.0 ")
+
+            install_game(game_root)
+
+            self.assertFalse(os.path.exists(os.path.join(collection_dir, "jogar.bat")))
+            self.assertFalse(os.path.exists(os.path.join(collection_dir, "JOGAR_COM_TTS.bat")))
+
+    def test_validate_entries_does_not_drop_files_when_repo_parent_is_named_tests(self):
+        from unittest import mock
+        from install_tts_mod import CopyEntry, _validate_entries
+
+        fake_root = os.path.join("C:", os.sep, "work", "tests", "tts_repo")
+        fake_src = os.path.join(fake_root, "renpy_mod", "tts_server.py")
+        with mock.patch("install_tts_mod.PROJECT_ROOT", fake_root):
+            kept = _validate_entries([CopyEntry(fake_src, os.path.join("C:", os.sep, "game", "tts_server.py"))])
+        self.assertEqual(len(kept), 1)
+
+    def test_launchers_and_installer_scripts_are_consistent_with_onnx_runtime(self):
+        with open(os.path.join(ROOT_DIR, "falcom_mod", "JOGAR_COM_TTS.bat"), "r", encoding="utf-8") as f:
+            falcom_bat = f.read()
+        self.assertIn(r"%LOCALAPPDATA%\UniversalKokoroTTS\runtime\Scripts\python.exe", falcom_bat)
+
+        with open(os.path.join(ROOT_DIR, "instalar.bat"), "r", encoding="utf-8") as f:
+            instalar = f.read()
+        self.assertIn(r".venv\Scripts\python.exe -m spacy download en_core_web_sm", instalar)
+
+        for rel in (("renpy_mod", "run_backend.bat"), ("renpy_mod", "tts_client_state.py")):
+            with open(os.path.join(ROOT_DIR, *rel), "r", encoding="utf-8") as f:
+                self.assertNotIn("PyTorch so-CPU", f.read(), f"Stale PyTorch comment in {rel}")
+
 
 if __name__ == "__main__":
     unittest.main()

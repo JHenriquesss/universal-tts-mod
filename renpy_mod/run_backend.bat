@@ -17,7 +17,7 @@ if exist ".venv\Scripts\python.exe" (
     goto :PYTHON_FOUND
 )
 
-:: 2. Runtime leve dedicado (PyTorch so-CPU), criado pelo instalar.bat
+:: 2. Runtime leve dedicado (Kokoro no ONNX Runtime), criado pelo instalar.bat
 if exist "%LOCALAPPDATA%\UniversalKokoroTTS\runtime\Scripts\python.exe" (
     set "PYTHON_EXE=%LOCALAPPDATA%\UniversalKokoroTTS\runtime\Scripts\python.exe"
     goto :PYTHON_FOUND

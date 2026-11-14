@@ -377,6 +377,7 @@ class TestTTSServerHarnessHelpers(unittest.TestCase):
             shutil.copy2(SERVER_SCRIPT, os.path.join(tmpdir, "tts_server.py"))
             shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "text_cleaner.py"), os.path.join(tmpdir, "text_cleaner.py"))
             shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_engines.py"), os.path.join(tmpdir, "tts_engines.py"))
+            shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_onnx_pipeline.py"), os.path.join(tmpdir, "tts_onnx_pipeline.py"))
             shutil.copy2(os.path.join(ROOT_DIR, "renpy_mod", "tts_protocol.py"), os.path.join(tmpdir, "tts_protocol.py"))
 
             env = os.environ.copy()
@@ -710,6 +711,58 @@ class TestTTSServerInstanceIdentity(unittest.TestCase):
             for s in (parent.stdout, parent.stderr):
                 if s is not None:
                     s.close()
+
+
+class TestTTSServerCommandHelpers(unittest.TestCase):
+    def _import_tts_server(self):
+        renpy_dir = os.path.dirname(SERVER_SCRIPT)
+        if renpy_dir not in sys.path:
+            sys.path.insert(0, renpy_dir)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        import tts_server
+        old_log_path = tts_server.log_path
+        tts_server.log_path = os.path.join(tmp.name, "tts_server.log")
+        self.addCleanup(setattr, tts_server, "log_path", old_log_path)
+        return tts_server
+
+    def test_enqueue_control_item_uses_timeout_when_queue_is_full(self):
+        import queue as py_queue
+        tts_server = self._import_tts_server()
+
+        full_q = py_queue.Queue(maxsize=1)
+        full_q.put(("SPEAK", "occupied"))
+        start = time.monotonic()
+        accepted = tts_server._enqueue_control_item(("SET_VOICE", "am_adam"), target_queue=full_q, timeout=0.05)
+        elapsed = time.monotonic() - start
+
+        self.assertFalse(accepted)
+        self.assertLess(elapsed, 0.5)
+
+    def test_handle_stop_command_calls_engine_stop_immediately_and_preserves_settings(self):
+        import queue as py_queue
+        tts_server = self._import_tts_server()
+
+        class FakeEngine:
+            def __init__(self):
+                self.stop_calls = 0
+
+            def stop(self):
+                self.stop_calls += 1
+
+        q = py_queue.Queue(maxsize=10)
+        q.put(("SPEAK", "old sentence"))
+        q.put(("SET_VOICE", "af_bella"))
+        q.put(("SPEAK", "another old sentence"))
+
+        engine = FakeEngine()
+        tts_server._handle_stop_command(engine, target_queue=q)
+
+        self.assertEqual(engine.stop_calls, 1)
+        items = []
+        while not q.empty():
+            items.append(q.get_nowait())
+        self.assertEqual(items, [("STOP", None), ("SET_VOICE", "af_bella")])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@
 init 999 python:
     import atexit
     import os
+    import socket
     import subprocess
     import sys
     import threading
@@ -20,7 +21,7 @@ init 999 python:
 
     from tts_client_state import TTSState, find_backend_python
     from tts_client_voice import BF_NAME_KEYS, PLAYER_NAME_KEYS, clean_speaker_name, collect_context_names, resolve_voice
-    from tts_client_hooks import extract_callback_text, install_display_hook, install_phone_callback_wrappers, install_save_compat_hook
+    from tts_client_hooks import current_say_text, current_say_who, extract_callback_text, install_display_hook, install_phone_callback_wrappers, install_save_compat_hook, install_say_capture, resolve_say_text, resolve_say_who
     from tts_client_auto import AutoAdvanceController
     from tts_client_speech import speak
     from tts_client_commands import decrease_speed, increase_speed, send_speed, toggle_audio, toggle_auto
@@ -32,6 +33,10 @@ init 999 python:
 
     tts_state = TTSState(persistent=persistent, default_voice=TTS_VOICE, config=renpy.config)
     _tts_connect_lock = threading.Lock()
+
+    # O callback de personagem do Ren'Py 7 nao entrega o texto da fala, entao
+    # o say do jogo e envolto para registrar a linha antes de ela ser exibida.
+    install_say_capture(tts_state, renpy)
 
     def _tts_backend_instance_token():
         """Le o token de instancia publicado pelo backend no arquivo de prontidao."""
@@ -57,6 +62,18 @@ init 999 python:
             pass
         return expected_token
 
+    def _tts_close_socket(sock):
+        if not sock:
+            return
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            sock.close()
+        except Exception:
+            pass
+
     def _tts_flush_pending_speech():
         pending = getattr(tts_state, "pending_speech", None)
         if pending and tts_state.sock and getattr(tts_state, "tts_audio_enabled", True):
@@ -64,6 +81,7 @@ init 999 python:
             speak(tts_state, pending[0], pending[1], TTS_VOICE, renpy.substitute, tts_notify)
 
     def _tts_socket_listener(sock):
+        f = None
         try:
             f = sock.makefile('r')
             expected_token = getattr(tts_state, "expected_backend_token", None)
@@ -82,11 +100,9 @@ init 999 python:
                         tts_state.stale_backend = True
                         tts_state.sock = None
                         tts_state.listening = False
-                        try:
-                            sock.close()
-                        except Exception:
-                            pass
+                        _tts_close_socket(sock)
                         return
+                    _tts_flush_pending_speech()
                     continue
                 if line == "PLAYBACK_DONE":
                     tts_state.is_playing = False
@@ -96,6 +112,12 @@ init 999 python:
                         tts_state.auto_advance_flag = True
         except Exception as e:
             tts_notify("TTS Listener Erro: " + str(e))
+        finally:
+            if f is not None:
+                try:
+                    f.close()
+                except Exception:
+                    pass
         tts_state.listening = False
         tts_state.sock = None
         tts_state.is_playing = False
@@ -119,6 +141,10 @@ init 999 python:
         if tts_state.sock:
             try:
                 tts_state.sock.sendall(b"QUIT\n")
+            except Exception:
+                pass
+            try:
+                tts_state.sock.shutdown(socket.SHUT_RDWR)
             except Exception:
                 pass
             try:
@@ -153,10 +179,7 @@ init 999 python:
         tts_state.listening = False
         tts_state.connecting = False
         if tts_state.sock:
-            try:
-                tts_state.sock.close()
-            except Exception:
-                pass
+            _tts_close_socket(tts_state.sock)
             tts_state.sock = None
 
     def tts_connect(quiet=False):
@@ -195,12 +218,11 @@ init 999 python:
                 tts_state.stale_backend = False
                 tts_state.owns_backend = False
                 tts_state.connecting = False
-                tts_state.expected_backend_token = None
-                _tts_send_hello(s)
+                tts_state.expected_backend_token = _tts_backend_instance_token()
+                _tts_send_hello(s, tts_state.expected_backend_token)
                 t = threading.Thread(target=_tts_socket_listener, args=(s,))
                 t.daemon = True
                 t.start()
-                _tts_flush_pending_speech()
                 if not quiet:
                     tts_notify("Conectado ao Backend Externo!")
                 return True
@@ -265,7 +287,6 @@ init 999 python:
                             t = threading.Thread(target=_tts_socket_listener, args=(s,))
                             t.daemon = True
                             t.start()
-                            _tts_flush_pending_speech()
                             if not quiet:
                                 tts_notify("TTS Online (Auto-start)")
                             try:
@@ -308,9 +329,7 @@ init 999 python:
         speak(tts_state, text, voice, TTS_VOICE, renpy.substitute, tts_notify)
 
     def _tts_extract_speaker(kwargs=None):
-        who = kwargs.get("who") if (kwargs and isinstance(kwargs, dict)) else None
-        if not who:
-            who = getattr(renpy.store, "_last_say_who", None)
+        who = resolve_say_who(kwargs, getattr(tts_state, "last_say_who", None), renpy.store)
         if who:
             if isinstance(who, str):
                 who_str = who.strip()
@@ -343,13 +362,14 @@ init 999 python:
     def tts_speak_once(text, voice=None):
         if not text:
             return
-        if text != getattr(tts_state, "last_spoken", None):
-            tts_state.last_spoken = text
-            actual_voice = voice or _tts_resolve_voice(_tts_extract_speaker())
+        actual_voice = voice or _tts_resolve_voice(_tts_extract_speaker())
+        dedup_key = (text, actual_voice)
+        if dedup_key != getattr(tts_state, "last_spoken", None):
+            tts_state.last_spoken = dedup_key
             tts_speak(text, voice=actual_voice)
 
     def _tts_extract_callback_text(kwargs):
-        return extract_callback_text(kwargs)
+        return resolve_say_text(kwargs, getattr(tts_state, "last_say_what", None), renpy.store)
 
     def _tts_install_phone_callback_wrappers():
         install_phone_callback_wrappers(renpy.store, lambda text: tts_speak_once(text), ("Phone_SendSound", "Phone_ReceiveSound"))
@@ -386,12 +406,17 @@ init 999 python:
             what = _tts_extract_callback_text(kwargs)
             tts_state.current_text = str(what or "")
             speaker = _tts_extract_speaker(kwargs)
+            # Consome o estado capturado do say atual para nao vazar para dialogos futuros.
+            tts_state.last_say_what = None
+            tts_state.last_say_who = None
             voice = _tts_resolve_voice(speaker)
             if what and getattr(tts_state, "tts_audio_enabled", True):
                 tts_speak_once(what, voice=voice)
             else:
-                tts_state.last_spoken = what
+                tts_state.last_spoken = (what, voice) if what else None
                 tts_state.is_playing = False
+        elif event == "end":
+            tts_state.last_spoken = None
 
     config.all_character_callbacks.append(_tts_callback)
 
@@ -442,9 +467,6 @@ init 999 python:
         config.quit_callbacks.append(tts_shutdown)
     atexit.register(tts_shutdown)
     config.overlay_screens.append("tts_auto_forward_checker")
-
-    # Auto-start on boot
-    tts_start_callback()
 
 init python:
     class TTSAutoAdvanceAction(Action):

@@ -85,6 +85,7 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
+.venv\Scripts\python.exe -m spacy download en_core_web_sm >nul 2>&1
 
 :: 5. Runtime leve do backend, compartilhado por todos os jogos.
 set "TTS_RUNTIME=%LOCALAPPDATA%\UniversalKokoroTTS\runtime"

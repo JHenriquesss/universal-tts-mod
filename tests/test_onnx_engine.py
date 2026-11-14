@@ -80,7 +80,8 @@ class OnnxPipelineTest(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def _pipeline(self, g2p="misaki", lang="a"):
-        with mock.patch.object(tts_engines, "_make_misaki_g2p", lambda lang: FakeG2P() if lang in ("a", "b") else None):
+        import tts_onnx_pipeline
+        with mock.patch.object(tts_onnx_pipeline, "_make_misaki_g2p", lambda lang: FakeG2P() if lang in ("a", "b") else None):
             return tts_engines.OnnxPipeline(lang=lang, model="int8", g2p=g2p, onnx_dir=self.tmp.name)
 
     def test_session_uses_cpu_and_the_backend_thread_limit(self):

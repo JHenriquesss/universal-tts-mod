@@ -23,6 +23,7 @@ Supports **Ren'Py**, **Unity**, **RPG Maker MZ**, with experimental **Falcom ED6
 - `tts_mod.rpy`
 - `tts_server.py`
 - `tts_engines.py`
+- `tts_onnx_pipeline.py`
 - `text_cleaner.py`
 - `tts_protocol.py`
 - `tts_client_state.py`

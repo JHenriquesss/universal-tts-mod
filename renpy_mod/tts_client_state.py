@@ -13,8 +13,8 @@ import os
 DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.25
 
-# Runtime dedicado do backend: venv com PyTorch so-CPU, criado pelo instalar.bat.
-# Fica fora do Python global para nao carregar o CUDA (~1 GB a mais de RAM).
+# Runtime dedicado do backend: venv leve com Kokoro no ONNX Runtime, criado pelo instalar.bat.
+# Fica fora do Python global para evitar dependencias pesadas (~1 GB a mais de RAM).
 RUNTIME_DIR_PARTS = ("UniversalKokoroTTS", "runtime")
 
 
@@ -93,6 +93,11 @@ class TTSState(object):
         self.expected_backend_token = None
         self.stale_backend = False
 
+        # Ultima fala vista pelo jogo, registrada no ponto em que o say e
+        # chamado. O callback de personagem do Ren'Py 7 nao entrega o texto.
+        self.last_say_who = None
+        self.last_say_what = None
+
         # Garante que speed nunca seja None, mesmo se o persistent salvou como None
         saved_speed = getattr(persistent, "tts_speed", DEFAULT_SPEED)
         self.speed = float(saved_speed) if saved_speed is not None else DEFAULT_SPEED
@@ -152,6 +157,8 @@ class TTSState(object):
         self.backend_token = None
         self.expected_backend_token = None
         self.stale_backend = False
+        self.last_say_who = None
+        self.last_say_what = None
         if not hasattr(self, "sock"):
             self.sock = None
         if not hasattr(self, "proc"):

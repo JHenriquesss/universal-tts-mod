@@ -2,7 +2,7 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 411 tests in 14.1s OK` (2026-11-07, after ONNX Runtime became the only Kokoro engine and the PyTorch engine was removed; earlier the same day: backend lightness pass and dedicated runtime).
+- Latest evidence: `Ran 443 tests in 9.5s OK` (2026-11-12, after hardening backend stop/queue timeouts, Ren'Py init deferral, socket cleanup, newline sanitization, RPG Maker MZ / Unity client parity, shared installer fixes, and modularizing core files under 500 lines; includes the SmallCoffee RPA-3.0 reader and `say_capture` suite).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
 - The recorded count is the count of the **committed** trunk: copy it from the output of
@@ -25,6 +25,7 @@
 | Client voice layer | `tests/test_tts_client_voice.py` | Speaker name cleanup, store context names, thought suffix, voice map hits, protagonist/partner aliases, male/female pools. |
 | Client state | `tests/test_tts_client_state.py` | State restored from the persistent, voice map loaded from the game folder, the voice map surviving a save and load. |
 | Client rules | `tests/test_tts_client_rules.py` | Phone callback wrappers, save compatibility hook, display hook, auto-advance timeout and native voice rules, speed/auto/audio commands. |
+| Say capture | `tests/test_say_capture.py` | The Ren'Py 7 character callback carries no dialogue text (`Character.cb_args` is empty), so the client reads the line from the wrapped `renpy.exports.say` and falls back to `renpy.store._last_say_what`; the capture is installed once and never fatal. |
 | Client layout | `tests/test_tts_client_layout.py` | The mod stays under the file size limit, its python blocks compile, the public client API stays available, every imported client module ships with the mod. |
 | Ren'Py startup/lifecycle | `tests/test_renpy_startup.py` | Auto-connect deferred; safe notify helper; `tts_kill()` sends `QUIT`, closes socket, waits/escalates process; `tts_shutdown()` registered on `quit_callbacks` kills owned backend and detaches external backend; `--parent-pid` passed on spawn; concurrent `tts_connect` does not kill/respawn a warming backend; instance token captured and mismatched instance rejected. |
 | Auto-advance | `tests/test_auto_advance.py` | Auto-forward on playback end, user interaction resets, no afm callback blocking. |
@@ -32,13 +33,14 @@
 | Lightness/package | `tests/test_lightness_cleanup.py` | No unsupported Edge/Sherpa deps/classes/docs; mock only via env; no deploy artifacts under `renpy_mod`; heavy ML dependencies (torch/transformers/accelerate/bitsandbytes) stay out of the requirements and the installer, and the removed `qwen_voice_pro` spike does not come back. |
 | Choice hints core | `tests/test_choice_hints_core.py` | Curated overrides generated; Unicode aliasing; label-scoped lookup; display caption stripping; hint color formatting; public Ren'Py screen names preserved. |
 | Extractor CLI | `tests/test_extract_menu_hints.py` | Byte fixture extraction, generated output shape, CLI path resolution, nested menus, no personal hardcoded paths. |
+| RPA archive reader | `tests/test_rpa_extract.py` | RPA-3.0 index reading (XOR key in the header, zlib index at the end of the file), listing names/sizes, extraction preserving the archive paths, extension filter, split entries with the prefix bytes, and rejection of unsupported formats. |
 | Installer | `tests/test_install_tts_mod.py` | Nested Ren'Py root detection; TTS-only copy plan; artifact/choice-overlay exclusion; dry-run does not write. |
 | Falcom installer | `tests/test_falcom_installer.py` | Falcom engine detection; Textractor runtime preflight fails fast when missing; install plan and copy with a hermetic runtime. |
 | Falcom hook | `tests/test_falcom_hook.py` | Textractor hook, duplicate/fragment detection, multi-voice selection, speed hack. |
 | Falcom launcher | `tests/test_falcom_launcher.py` | Supervisor owns backend/game/bridge processes and only stops what it created. |
 | Falcom textractor | `tests/test_falcom_textractor.py` | Executable signature scan and Textractor configuration writing. |
 | RPG Maker MZ mod | `tests/test_rpgmaker_mz_mod.py` | Plugin JS contract, plugin registration, voice map wiring. |
-| Voice maps | `tests/test_*_voice_map.py` (10 files) | Per-game speaker-to-voice maps: after_the_fall, baking_with_chocolate, being_super, cockham, femboy_sorority, grandmas_house, milf_obsession, much_bigger_than_my_boyfriend, shadows_of_trust, the_home_of_pleasure, university_of_problems. |
+| Voice maps | `tests/test_*_voice_map.py` (12 files) | Per-game speaker-to-voice maps: after_the_fall, baking_with_chocolate, being_super, cockham, femboy_sorority, grandmas_house, milf_obsession, much_bigger_than_my_boyfriend, shadows_of_trust, small_coffee, the_home_of_pleasure, university_of_problems. |
 | Backend smoke check | `tests/test_smoke_check.py` | Mock backend process starts, accepts command, logs context/events, exits via `QUIT`; timeout kills child. |
 | Release manifest/archive | `tests/test_release_manifest.py` | Manifest sources/destinations match installer; forbidden files excluded; archive zip names exactly match manifest; missing output parent rejected; package/version metadata; default versioned archive path. |
 | README/wiki docs | `tests/test_readme_deploy_docs.py`, `tests/test_wiki_state.py` | Deploy checklist, voice/protocol docs, extractor CLI examples, TTS-only workflow, release hygiene/archive docs, final release checklist, wiki open-thread state, and code-derived guards for the supported engines and the protocol commands. |
