@@ -38,6 +38,8 @@ from tts_protocol import (  # noqa: E402
     normalize_lang_code as _normalize_lang,
     parse_cli_float_flag,
     parse_cli_int_flag,
+    parse_speed,
+    preview_text as _preview_text,
     remove_owned_status,
     resolve_cpu_threads,
     resolve_engine_name,
@@ -57,14 +59,20 @@ def _log(msg):
         pass
 
 
-configure_windows_stdin_utf8(_log)
-setup_stream_logger(_log)
-
 _speech_queue = queue.Queue(maxsize=10)
 _activity = {"last_ts": time.monotonic(), "busy": False}
 DEFAULT_VOICE = "af_heart"
 # Sem falas por esse tempo, a RAM ociosa do backend volta para o Windows.
 IDLE_TRIM_SECONDS = 30.0
+
+# Geracao do STOP: cada fala leva a geracao em que foi enfileirada e cada STOP a
+# avanca. Sem isso, um STOP logo depois de o worker tirar a fala da fila era apagado
+# pelo reset do stop_flag no speak, e a linha antiga era sintetizada inteira.
+_stop_generation = [0]
+
+
+def _current_generation():
+    return _stop_generation[0]
 
 
 def _touch_activity():
@@ -94,6 +102,7 @@ def _handle_stop_command(engine, target_queue=None):
     else:
         preserved = drain_preserving(target_queue)
         q = target_queue
+    _stop_generation[0] += 1
     # Interrompe de imediato a sintese multi-frase e a fila de audio antes do marcador STOP.
     if hasattr(engine, "stop"):
         try:
@@ -111,14 +120,39 @@ def _handle_stop_command(engine, target_queue=None):
             pass
 
 
-def _preview_text(text, limit=80):
-    text = str(text).replace("\n", " ").replace("\r", " ")
-    return text if len(text) <= limit else text[:limit] + "..."
+def _run_task(engine, task, settings):
+    """Executa um item da fila. ``settings`` guarda a voz e a velocidade correntes."""
+    cmd, data = task[0], task[1]
+    if cmd == "SET_SPEED":
+        settings["speed"] = data
+    elif cmd == "SET_VOICE":
+        settings["voice"] = data or settings["voice"]
+    elif cmd == "SET_LANG":
+        if hasattr(engine, "set_lang"):
+            try:
+                engine.set_lang(data)
+                _log(f"engine.set_lang lang={data}")
+            except Exception as err:
+                _log(f"engine.set_lang error={err}")
+    elif cmd == "SPEAK":
+        generation = task[2] if len(task) > 2 else _current_generation()
+        if generation != _current_generation():
+            _log(f"speak skipped=stale_after_stop text_preview={_preview_text(data)}")
+            return
+        data = str(data)  # apostrofos ja normalizados pelo TextCleaner antes da fila
+        _log(f"speak voice={settings['voice']} text_preview={_preview_text(data)}")
+        engine.speak(
+            data,
+            voice=settings["voice"],
+            speed=settings["speed"],
+            cancelled=lambda: _current_generation() != generation,
+        )
+    elif cmd == "STOP":
+        engine.stop()
 
 
 def _worker(engine, initial_speed, initial_voice):
-    speed = initial_speed
-    voice = initial_voice or DEFAULT_VOICE
+    settings = {"speed": initial_speed, "voice": initial_voice or DEFAULT_VOICE}
     trimmed = True  # o engine ja fez o trim depois de carregar
     while True:
         try:
@@ -129,27 +163,7 @@ def _worker(engine, initial_speed, initial_voice):
             trimmed = False
             _activity["busy"] = True
             _touch_activity()
-            cmd, data = task
-            if cmd == "SET_SPEED":
-                speed = data
-            elif cmd == "SET_VOICE":
-                voice = data or voice
-            elif cmd == "SET_LANG":
-                if hasattr(engine, "set_lang"):
-                    try:
-                        engine.set_lang(data)
-                        _log(f"engine.set_lang lang={data}")
-                    except Exception as err:
-                        _log(f"engine.set_lang error={err}")
-            elif cmd == "SPEAK":
-                data = str(data)
-                for apo in ["’", "‘", "´", "`", "′", "’"]:
-                    data = data.replace(apo, "'")
-                _log(f"Processando: {_preview_text(data)}")
-                _log(f"speak voice={voice} text_preview={_preview_text(data)}")
-                engine.speak(data, voice=voice, speed=speed)
-            elif cmd == "STOP":
-                engine.stop()
+            _run_task(engine, task, settings)
 
             _activity["busy"] = False
             _touch_activity()
@@ -181,11 +195,22 @@ def _make_engine(lang, config=None):
     if engine_name == "mock":
         _log("Usando engine mock para testes.")
         return MockEngine()
-    return KokoroEngine(lang=lang, model=config.get("onnx_model"), g2p=config.get("onnx_g2p"))
+    engine = KokoroEngine(lang=lang, model=config.get("onnx_model"), g2p=config.get("onnx_g2p"))
+    if engine.pipeline is None:
+        # Sem o modelo o backend publicaria READY e o jogo ficaria mudo, achando
+        # que esta tudo certo. O main transforma este erro em ERROR| no status.
+        raise RuntimeError(
+            "o modelo Kokoro nao carregou: {}".format(getattr(engine, "load_error", None) or "erro desconhecido")
+        )
+    return engine
 
 
 def main():
     import socket
+
+    # So como backend: no import (testes, ferramentas) o stdout alheio nao vai para o log.
+    configure_windows_stdin_utf8(_log)
+    setup_stream_logger(_log)
 
     positional = strip_cli_flags(sys.argv[1:])
     requested_lang = positional[0] if len(positional) > 0 else "a"
@@ -199,13 +224,8 @@ def main():
     host = "127.0.0.1"
     cfg = load_json_config(os.path.join(here, "tts_config.json"))
     parent_pid = parse_cli_int_flag(sys.argv, "--parent-pid")
-    cli_idle = parse_cli_float_flag(sys.argv, "--idle-timeout")
-    raw_cli_idle = None
-    if "--idle-timeout" in sys.argv:
-        idx = sys.argv.index("--idle-timeout")
-        raw_cli_idle = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
     idle_timeout = resolve_idle_timeout(
-        cli_idle if cli_idle is not None else raw_cli_idle,
+        parse_cli_float_flag(sys.argv, "--idle-timeout"),
         os.environ.get("TTS_IDLE_TIMEOUT"),
     )
     exit_on_disconnect = has_cli_flag(sys.argv, "--exit-on-disconnect")
@@ -393,14 +413,7 @@ def main():
                             return 0
                         if line.startswith(CMD_SET_SPEED + ":"):
                             raw_speed = line[10:].strip()
-                            valid_speed = None
-                            try:
-                                import math
-                                parsed = float(raw_speed)
-                                if not math.isnan(parsed) and not math.isinf(parsed) and 0.1 <= parsed <= 3.0:
-                                    valid_speed = parsed
-                            except Exception:
-                                pass
+                            valid_speed = parse_speed(raw_speed)
                             if valid_speed is not None:
                                 speed = valid_speed
                                 _log(f"command=SET_SPEED speed={speed}")
@@ -442,15 +455,16 @@ def main():
                         if cleaned_text:
                             print(f"\n[TEXTO RECEBIDO] {_preview_text(cleaned_text)}")
                             _log(f"text_preview={_preview_text(cleaned_text)}")
+                            speak_item = ("SPEAK", cleaned_text, _current_generation())
                             try:
-                                _speech_queue.put(("SPEAK", cleaned_text), timeout=1.0)
+                                _speech_queue.put(speak_item, timeout=1.0)
                             except queue.Full:
                                 _log("speech_queue=full dropped_oldest")
                                 try:
                                     _speech_queue.get_nowait()
                                 except Exception:
                                     pass
-                                _speech_queue.put(("SPEAK", cleaned_text))
+                                _speech_queue.put(speak_item)
                         else:
                             _log("text_ignored=empty_after_cleaning")
                             print("[!] Texto vazio após limpeza (ignorado)")

@@ -13,12 +13,14 @@
 - Falcom ED6 side: `falcom_mod/falcom_text_hook.py` + `falcom_mod/falcom_win32_runtime.py` + `falcom_mod/falcom_voice_map.py`; hooks TextractorCLI/memory/clipboard for Trails in the Sky and sends multi-voice commands to the TCP TTS server.
 - Unity side: `unity_mod/src/KokoroTtsPlugin.cs`; BepInEx 5 plugin that captures `UI.Text`/TextMeshPro dialogue and speaks it through the same backend. The BepInEx runtime ships in `unity_mod/bepinex_pack/`.
 - RPG Maker MZ side: `rpgmaker_mz_mod/TTSModMZ.js`; NW.js plugin that connects to the same backend over a TCP socket, with voices in `rpgmaker_mz_mod/voice_map.json`.
-- Installer: `install_tts_mod.py`; detects engine (`renpy`, `unity`, `rpgmaker_mz`, `falcom`), copies TTS-only files by default for Ren'Py, optional choice overlay only via explicit flag. The Falcom engine requires the external Textractor runtime and fails fast when it is missing.
+- Installer: `install_tts_mod.py`; detects engine (`renpy`, `unity`, `rpgmaker_mz`, `falcom`), copies TTS-only files by default for Ren'Py, optional choice overlay only via explicit flag. Preflight checks live in `install_preflight.py`: the Falcom engine requires the external Textractor runtime and fails fast when it is missing; the Unity engine refuses IL2CPP games, 32-bit games (the bundled BepInEx 5 pack is x64) and games that already have BepInEx 6, and keeps an existing BepInEx 5 install, adding only the plugin and backend.
+- Backend failure: when the Kokoro model does not load, the backend writes `ERROR|<reason>` to `tts_ready.txt` and exits instead of publishing `READY`; the Ren'Py client shows that reason even on the silent startup connect.
+- STOP generation: every queued speech item carries the STOP generation it was enqueued in; a `STOP` bumps it, so a line the worker already dequeued is skipped and a line in synthesis is cancelled between sentences.
 - Smoke check: `smoke_check.py`; starts backend with `TTS_ENGINE=mock`, isolated port/log dir, sends socket command + `QUIT`, cleans up child process.
 - Release manifest/archive: `release_manifest.py`; read-only manifest check, package/version metadata, default versioned TTS-only zip builder using manifest destinations.
 
 ## Backend Lifecycle
-- Auto-connect deferred via `config.start_callbacks`; no direct `tts_connect(quiet=True)` inside init block.
+- Auto-connect deferred via `config.start_callbacks`; no direct `tts_connect(quiet=True)` inside init block. The start callback and the `v` key go through `tts_connect_async`, so probing the port (a closed port on Windows only refuses after the timeout) never freezes the game.
 - Notifications routed through safe helper; direct `renpy.notify(...)` avoided in mod code.
 - `tts_kill()` sends `QUIT\n`, closes socket, terminates process, waits briefly, escalates to kill on timeout.
 - Broken socket health checks clear `tts_state.sock` before reconnect.

@@ -149,6 +149,42 @@ class TestTTSClientVoice(unittest.TestCase):
 
         self.assertEqual(resolve_voice("Zelda", {}), resolve_voice("Zelda", {}))
 
+    def test_playername_without_underscore_resolves_to_mc_voice(self):
+        from renpy_mod.tts_client_voice import (
+            PLAYER_NAME_KEYS,
+            collect_context_names,
+            resolve_voice,
+        )
+
+        persistent = FakeStore(playername="Dez-no")
+        names = collect_context_names(PLAYER_NAME_KEYS, (persistent,))
+
+        self.assertIn("dez-no", names)
+        self.assertEqual(
+            resolve_voice("Dez-no", {"mc": "am_fenrir"}, player_names=names),
+            "am_fenrir",
+        )
+
+    def test_mc_and_mcname2_string_variables_resolve_to_mc_voice_and_ignore_objects(self):
+        from renpy_mod.tts_client_voice import (
+            PLAYER_NAME_KEYS,
+            collect_context_names,
+            resolve_voice,
+        )
+
+        store = FakeStore(mc="CustomMC", mcname2="Shadow", player_name=object())
+        names = collect_context_names(PLAYER_NAME_KEYS, (store,))
+
+        self.assertEqual(names, {"custommc", "shadow"})
+        self.assertEqual(
+            resolve_voice("CustomMC", {"mc": "am_onyx"}, player_names=names),
+            "am_onyx",
+        )
+        self.assertEqual(
+            resolve_voice("Shadow", {"mc": "am_onyx"}, player_names=names),
+            "am_onyx",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

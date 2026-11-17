@@ -13,6 +13,31 @@ def read_client_module(filename):
         return f.read()
 
 
+def _recording_thread(threads):
+    """Dublê de ``threading.Thread`` que so registra: o teste decide quando rodar."""
+
+    class RecordingThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self.target = target
+            self.args = args
+            self.daemon = daemon
+
+        def start(self):
+            threads.append(self)
+
+    return RecordingThread
+
+
+def _run_connect_threads(threads, ns):
+    """Roda, na ordem, as threads de conexao registradas (menos o listener do socket)."""
+    index = 0
+    while index < len(threads):
+        thread = threads[index]
+        index += 1
+        if thread.target is not ns["_tts_socket_listener"]:
+            thread.target(*thread.args)
+
+
 class TestRenpyStartupSafety(unittest.TestCase):
     def test_auto_connect_is_deferred_outside_init_block(self):
         with open(TTS_MOD_PATH, "r", encoding="utf-8") as f:
@@ -139,8 +164,9 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
     def test_client_reads_the_backend_instance_token_from_the_status_file(self):
         body = self._function_body("_tts_backend_instance_token")
 
-        self.assertIn("tts_ready.txt", body)
+        self.assertIn("_tts_read_status()", body)
         self.assertIn("READY|", body)
+        self.assertIn("tts_ready.txt", self._function_body("_tts_read_status"))
 
     def test_client_requests_the_instance_token_with_hello(self):
         body = self._function_body("_tts_send_hello")
@@ -155,10 +181,11 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
         self.assertIn("expected_backend_token", body)
 
     def test_spawned_backend_token_is_captured_before_the_listener_starts(self):
-        body = self._function_body("tts_connect")
+        self.assertIn("_tts_open_socket(", self._function_body("tts_connect"))
+        body = self._function_body("_tts_open_socket")
 
         self.assertIn("expected_backend_token", body)
-        self.assertIn("_tts_send_hello", body)
+        self.assertLess(body.index("_tts_send_hello"), body.index("_tts_socket_listener"))
 
 
 
@@ -233,22 +260,57 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
             def close(self):
                 pass
 
-        class InertThread:
-            def __init__(self, target=None, args=(), daemon=None):
-                pass
-            def start(self):
-                pass
-
+        threads = []
         with tempfile.TemporaryDirectory() as tmpdir, \
                 mock.patch("subprocess.Popen", side_effect=lambda cmd, **kw: spawned.append(list(cmd))), \
                 mock.patch("socket.socket", return_value=RefusingSocket()), \
-                mock.patch("threading.Thread", InertThread), \
+                mock.patch("threading.Thread", _recording_thread(threads)), \
                 mock.patch("time.sleep"):
             ns = self._exec_client_namespace(tmpdir, run_start_callbacks=False)
             self.assertEqual(spawned, [], "init block must not spawn backend or open sockets")
             for callback in ns["config"].start_callbacks:
                 callback()
+            self.assertEqual(spawned, [], "the start callback must not probe the port on the game thread")
+            self.assertEqual([t.target for t in threads], [ns["tts_connect"]])
+            _run_connect_threads(threads, ns)
             self.assertEqual(len(spawned), 1)
+
+    def test_backend_error_is_shown_even_in_quiet_mode(self):
+        """Backend que nao sobe (ex.: modelo ausente) precisa explicar por que o jogo esta mudo."""
+        import tempfile
+        from unittest import mock
+
+        notes = []
+
+        class ExitedProc:
+            def poll(self):
+                return 1
+
+        class RefusingSocket:
+            def settimeout(self, t):
+                pass
+            def connect(self, addr):
+                raise ConnectionRefusedError("offline")
+            def close(self):
+                pass
+
+        threads = []
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                mock.patch("subprocess.Popen", return_value=ExitedProc()), \
+                mock.patch("socket.socket", return_value=RefusingSocket()), \
+                mock.patch("threading.Thread", _recording_thread(threads)), \
+                mock.patch("time.sleep"):
+            ns = self._exec_client_namespace(tmpdir, run_start_callbacks=False)
+            ns["renpy"].notify = notes.append
+            with open(os.path.join(tmpdir, "tts_ready.txt"), "w", encoding="utf-8") as handle:
+                handle.write("ERROR|o modelo Kokoro nao carregou: rode o instalar.bat")
+            real_kill = ns["tts_kill"]
+            ns["tts_kill"] = lambda: None  # mantem o ERROR| que o backend acabou de publicar
+            ns["tts_connect"](True)
+            ns["tts_kill"] = real_kill
+            _run_connect_threads(threads, ns)
+
+        self.assertIn("TTS: o modelo Kokoro nao carregou: rode o instalar.bat", notes)
 
     def test_listener_closes_makefile_and_uses_shutdown_on_token_mismatch(self):
         import io
@@ -354,15 +416,12 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
             def close(self):
                 pass
 
-        class InertThread:
-            def __init__(self, target=None, args=(), daemon=None):
-                self.target = target
-                self.daemon = daemon
-            def start(self):
-                pass
-
-        with tempfile.TemporaryDirectory() as tmpdir,                 mock.patch("subprocess.Popen", side_effect=fake_popen),                 mock.patch("socket.socket", return_value=RefusingSocket()),                 mock.patch("threading.Thread", InertThread),                 mock.patch("time.sleep"):
+        threads = []
+        with tempfile.TemporaryDirectory() as tmpdir,                 mock.patch("subprocess.Popen", side_effect=fake_popen),                 mock.patch("socket.socket", return_value=RefusingSocket()),                 mock.patch("threading.Thread", _recording_thread(threads)),                 mock.patch("time.sleep"):
             ns = self._exec_client_namespace(tmpdir)
+            # So a thread de conexao do start callback; o retry fica pendente,
+            # como um backend ainda aquecendo.
+            threads[0].target(*threads[0].args)
             self.assertEqual(len([x for x in spawned if isinstance(x, list)]), 1)
             ns["tts_connect"](True)
             self.assertEqual(
@@ -402,14 +461,10 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
             def close(self):
                 pass
 
-        class InertThread:
-            def __init__(self, target=None, args=(), daemon=None):
-                pass
-            def start(self):
-                pass
-
-        with tempfile.TemporaryDirectory() as tmpdir,                 mock.patch("subprocess.Popen", return_value=FakeProc()),                 mock.patch("socket.socket", return_value=RefusingSocket()),                 mock.patch("threading.Thread", InertThread),                 mock.patch("time.sleep"):
+        threads = []
+        with tempfile.TemporaryDirectory() as tmpdir,                 mock.patch("subprocess.Popen", return_value=FakeProc()),                 mock.patch("socket.socket", return_value=RefusingSocket()),                 mock.patch("threading.Thread", _recording_thread(threads)),                 mock.patch("time.sleep"):
             ns = self._exec_client_namespace(tmpdir)
+            threads[0].target(*threads[0].args)  # conexao do start callback sobe o backend
             ns["tts_state"].sock = FakeSock()
             ns["tts_shutdown"]()
             self.assertIn(("sendall", b"QUIT\n"), events)

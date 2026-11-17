@@ -11,7 +11,7 @@ import re
 
 
 PLAYER_NAME_KEYS = (
-    "player_name", "povname", "pc_name", "mc_name", "mcname", "mcN", "mcn",
+    "player_name", "playername", "povname", "pc_name", "mc_name", "mcname", "mcname2", "mc", "mcN", "mcn",
     "hero_name", "protagonist_name", "user_name", "name", "firstname",
     "first_name", "galleryMC", "gallerymc",
 )
@@ -74,8 +74,8 @@ def collect_context_names(keys, sources):
             continue
         for attr in keys:
             value = getattr(source, attr, None)
-            if value is not None:
-                name = str(value).strip().lower()
+            if value is not None and hasattr(value, "strip"):
+                name = value.strip().lower()
                 if name:
                     found.add(name)
     return found

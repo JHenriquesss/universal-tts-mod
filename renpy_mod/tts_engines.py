@@ -126,7 +126,7 @@ class TTSEngine(abc.ABC):
                         pass
 
     @abc.abstractmethod
-    def speak(self, text, voice=None, speed=1.0):
+    def speak(self, text, voice=None, speed=1.0, cancelled=None):
         pass
 
     def stop(self):
@@ -149,6 +149,7 @@ class KokoroEngine(TTSEngine):
         self.audio_queue = queue.Queue()
         self.stop_flag = False
         self.on_playback_done = None
+        self.load_error = None
         self.onnx_model, self.onnx_g2p = resolve_onnx_options(model, g2p)
 
         try:
@@ -179,6 +180,7 @@ class KokoroEngine(TTSEngine):
             _log_engine(f"{self.ENGINE_LABEL} carregada com sucesso.")
         except Exception as e:
             _log_engine(f"Erro ao carregar Kokoro: {e}")
+            self.load_error = str(e) or type(e).__name__
             self.pipeline = None
 
     def set_lang(self, lang):
@@ -356,16 +358,27 @@ class KokoroEngine(TTSEngine):
         # crescer em disco durante sessoes longas.
         self.clean_cache()
 
-    def speak(self, text, voice=None, speed=1.0):
+    def speak(self, text, voice=None, speed=1.0, cancelled=None):
+        """Sintetiza e enfileira a fala.
+
+        ``cancelled`` e chamado entre as frases: o servidor passa uma checagem
+        da geracao do STOP, que continua valendo mesmo quando o STOP chegou
+        antes deste metodo zerar o ``stop_flag``.
+        """
         if not self.pipeline:
             print("[ERRO] Pipeline Kokoro nao inicializado!")
             return False
+
+        def interrupted():
+            return self.stop_flag or (cancelled is not None and cancelled())
 
         # Voz padrão se não for especificada
         actual_voice = voice if voice and voice != "None" else DEFAULT_KOKORO_VOICE
 
         self.stop_flag = False
         self.audio_queue.put("STOP")
+        if interrupted():
+            return False
 
         # 1. Checagem de Cache em Disco (.tts_cache)
         cache_key = self._get_cache_key(text, actual_voice, speed)
@@ -386,7 +399,7 @@ class KokoroEngine(TTSEngine):
             count = 0
             collected_chunks = []
             for _, _, audio in self.pipeline(text, voice=actual_voice, speed=speed, split_pattern=r'(?<=[.!?])\s+'):
-                if self.stop_flag:
+                if interrupted():
                     break
                 audio_np = np.asarray(audio, dtype=np.float32).reshape(-1)
                 del audio
@@ -395,7 +408,7 @@ class KokoroEngine(TTSEngine):
                     collected_chunks.append(audio_np)
                 count += 1
 
-            if self.stop_flag:
+            if interrupted():
                 print(f"[STOP] Geracao interrompida ({count} segmentos antes do STOP)")
                 return False
 
@@ -448,7 +461,9 @@ class MockEngine(TTSEngine):
         self._default_device_id = -1
         self.on_playback_done = None
 
-    def speak(self, text, voice=None, speed=1.0):
+    def speak(self, text, voice=None, speed=1.0, cancelled=None):
+        if cancelled is not None and cancelled():
+            return False
         if self.on_playback_done:
             try:
                 self.on_playback_done()

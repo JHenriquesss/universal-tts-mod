@@ -223,6 +223,26 @@ class EphemeralCacheLifecycleTest(EngineTestBase):
         self.assertNotIn("FINISH_MARKER", string_markers)
         self.assertEqual([f for f in os.listdir(engine.cache_dir) if f.endswith(".npy")], [])
 
+    def test_speak_cancelled_before_it_starts_synthesizes_nothing(self):
+        """Um STOP que chegou antes do speak comecar vence o reset do stop_flag."""
+        engine, _ = self._make()
+        queued = []
+        engine.audio_queue.put = queued.append
+
+        completed = engine.speak("Old line.", voice="af_heart", speed=1.0, cancelled=lambda: True)
+
+        self.assertFalse(completed)
+        self.assertEqual(engine.pipeline.calls, [])
+        self.assertNotIn("FINISH_MARKER", queued)
+
+    def test_failed_load_records_the_reason(self):
+        def broken(*args, **kwargs):
+            raise FileNotFoundError("Arquivo do modelo Kokoro ausente: x")
+
+        with mock.patch.object(tts_engines, "OnnxPipeline", broken):
+            engine, _ = self._make()
+        self.assertIn("Arquivo do modelo Kokoro ausente", engine.load_error)
+
     def test_default_voices_are_valid_kokoro_ids(self):
         voices = tts_engines.get_available_voices()
         self.assertIn("af_heart", voices)

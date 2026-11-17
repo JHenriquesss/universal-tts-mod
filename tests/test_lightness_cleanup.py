@@ -35,7 +35,7 @@ class TestKokoroOnlyLightnessCleanup(unittest.TestCase):
 
         self.assertIn('resolve_engine_name(os.environ.get("TTS_ENGINE")', server)
         self.assertIn('engine_name == "mock"', server)
-        self.assertIn("return KokoroEngine", server)
+        self.assertIn("engine = KokoroEngine(", server)
 
     def test_mock_engine_does_not_probe_audio_devices(self):
         source = read_project_file("renpy_mod", "tts_engines.py")
