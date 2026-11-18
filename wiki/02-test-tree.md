@@ -2,7 +2,7 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 465 tests in 13.0s OK` (2026-11-18, after fixing HIBAH S2 deployment: added `pname` protagonist alias harvesting, `K_v` underlay binding and clearing stale `self_voicing` from persistent on start/load, and `hibah_s2` voice map + tests).
+- Latest evidence: `Ran 473 tests in 16.7s OK` (2026-11-18, after P1 audio/speed/voice hardening: `FINISH_MARKER` on non-cancelled synthesis errors, unified `0.5`–`2.0x` speed ceiling across clients/protocol/cache, full 54-voice Kokoro v1.0 catalog, gender-aware unknown-voice fallback with log warning, and `voice_map.json` corruption notifications).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
 - The recorded count is the count of the **committed** trunk: copy it from the output of

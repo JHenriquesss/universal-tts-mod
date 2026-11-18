@@ -289,7 +289,7 @@ def main():
         t.start()
 
         instance_token = _new_instance_token()
-        voices_list = ",".join(get_available_voices())
+        voices_list = ",".join(get_available_voices(engine))
         with open(status_path, "w", encoding="utf-8") as f:
             f.write(f"READY|{instance_token}|{voices_list}")
 

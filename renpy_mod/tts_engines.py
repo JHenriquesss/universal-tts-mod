@@ -7,6 +7,7 @@ import time
 from tts_onnx_pipeline import (
     DEFAULT_KOKORO_VOICE,
     ESPEAK_LANGS,
+    KOKORO_V1_VOICES,
     ONNX_DIR_PARTS,
     ONNX_G2P_MODES,
     ONNX_MODEL_FILES,
@@ -19,25 +20,10 @@ from tts_onnx_pipeline import (
     resolve_onnx_dir,
     resolve_onnx_options,
 )
-from tts_protocol import trim_working_set
+from tts_protocol import clamp_speed, trim_working_set
 
-# Vozes padrao suportadas pelo Kokoro ONNX v1.0
-DEFAULT_VOICE_MAP = {
-    "af_heart": "af_heart",
-    "af_bella": "af_bella",
-    "af_sarah": "af_sarah",
-    "af_sky": "af_sky",
-    "af_nicole": "af_nicole",
-    "af_aoede": "af_aoede",
-    "am_adam": "am_adam",
-    "am_onyx": "am_onyx",
-    "am_eric": "am_eric",
-    "am_michael": "am_michael",
-    "ef_dora": "ef_dora",
-    "pf_dora": "pf_dora",
-    "pm_alex": "pm_alex",
-}
-DEFAULT_KOKORO_VOICE = "af_heart"
+# Vozes padrao suportadas pelo Kokoro ONNX v1.0 (54 vozes em voices-v1.0.bin).
+DEFAULT_VOICE_MAP = {voice_name: voice_name for voice_name in KOKORO_V1_VOICES}
 
 # Versao do modelo de sintese. Entra na chave do cache em disco (junto com a
 # variante e a pronuncia): sem isso, uma troca de modelo continuaria servindo o
@@ -51,7 +37,11 @@ SESSION_CACHE_MAX_MB = 50
 _REGISTERED_CACHE_DIRS = set()
 
 
-def get_available_voices():
+def get_available_voices(engine=None):
+    kokoro_obj = getattr(getattr(engine, "pipeline", None), "kokoro", None)
+    live_voices = getattr(kokoro_obj, "voices", None)
+    if isinstance(live_voices, dict) and live_voices:
+        return sorted(live_voices.keys())
     return list(DEFAULT_VOICE_MAP.keys())
 
 
@@ -328,10 +318,12 @@ class KokoroEngine(TTSEngine):
     def _get_cache_key(self, text, voice=None, speed=1.0):
         import hashlib
         actual_voice = voice if voice and voice != "None" else DEFAULT_KOKORO_VOICE
+        low, high = ONNX_SPEED_RANGE
+        effective_speed = clamp_speed(speed, default=1.0, low=low, high=high)
         model_version = "{}-{}-{}".format(
             MODEL_VERSION, getattr(self, "onnx_model", "fp32"), getattr(self, "onnx_g2p", "misaki")
         )
-        return hashlib.md5(f"{model_version}_{actual_voice}_{speed:.2f}_{text}".encode("utf-8")).hexdigest()
+        return hashlib.md5(f"{model_version}_{actual_voice}_{effective_speed:.2f}_{text}".encode("utf-8")).hexdigest()
 
     def _get_from_cache(self, cache_key):
         cache_file = os.path.join(self.cache_dir, f"{cache_key}.npy")
@@ -424,7 +416,10 @@ class KokoroEngine(TTSEngine):
             return True
         except Exception as e:
             print(f"[ERRO] Falha na geracao Kokoro: {e}")
-            _log_engine(f"Kokoro error: {e}")
+            _log_engine(f"Kokoro error (voice={actual_voice}, speed={speed}): {e}")
+            # Sem o FINISH_MARKER o cliente que espera PLAYBACK_DONE trava no auto-advance.
+            if not interrupted():
+                self.audio_queue.put("FINISH_MARKER")
         return False
 
     def speak_to_file(self, text, output_path, voice=None, speed=1.0):

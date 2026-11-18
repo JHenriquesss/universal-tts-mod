@@ -12,6 +12,20 @@ import os
 
 DEFAULT_VOICE = "af_heart"
 DEFAULT_SPEED = 1.25
+MIN_SPEED = 0.5
+MAX_SPEED = 2.0
+
+
+def _clamp_client_speed(raw_speed):
+    if raw_speed is None:
+        return DEFAULT_SPEED
+    try:
+        parsed = float(raw_speed)
+    except (TypeError, ValueError):
+        return DEFAULT_SPEED
+    if parsed != parsed:  # NaN check compativel com Python 2 e 3
+        return DEFAULT_SPEED
+    return min(MAX_SPEED, max(MIN_SPEED, parsed))
 
 # Runtime dedicado do backend: venv leve com Kokoro no ONNX Runtime, criado pelo instalar.bat.
 # Fica fora do Python global para evitar dependencias pesadas (~1 GB a mais de RAM).
@@ -98,32 +112,49 @@ class TTSState(object):
         self.last_say_who = None
         self.last_say_what = None
 
-        # Garante que speed nunca seja None, mesmo se o persistent salvou como None
+        # Garante que speed nunca seja None nem ultrapasse o limite nativo (2.0x)
         saved_speed = getattr(persistent, "tts_speed", DEFAULT_SPEED)
-        self.speed = float(saved_speed) if saved_speed is not None else DEFAULT_SPEED
+        self.speed = _clamp_client_speed(saved_speed)
         self.current_voice = default_voice
         self.voice_map = {}
+        self.voice_map_error = None
         self._last_sent_voice = None
         self._load_voice_map()
 
     def _load_voice_map(self):
-        """Le o voice_map.json do jogo. Um save antigo nao pode impedir a leitura."""
-        try:
-            if getattr(self, "voice_map", None) is None:
-                self.voice_map = {}
-            config = getattr(self, "_config", None)
-            for base in (
-                getattr(config, "gamedir", None),
-                getattr(config, "basedir", None),
-            ):
-                if not base:
-                    continue
-                map_path = os.path.join(base, "voice_map.json")
-                if os.path.isfile(map_path):
-                    with open(map_path, "r", encoding="utf-8") as handle:
-                        self.voice_map.update(json.load(handle))
-        except Exception:
-            pass
+        """Le o voice_map.json do jogo e registra erro diagnostico se estiver corrompido."""
+        if getattr(self, "voice_map", None) is None:
+            self.voice_map = {}
+        self.voice_map_error = None
+        config = getattr(self, "_config", None)
+        for base in (
+            getattr(config, "gamedir", None),
+            getattr(config, "basedir", None),
+        ):
+            if not base:
+                continue
+            map_path = os.path.join(base, "voice_map.json")
+            if not os.path.isfile(map_path):
+                continue
+            try:
+                with open(map_path, "r", encoding="utf-8") as handle:
+                    loaded = json.load(handle)
+                if not isinstance(loaded, dict):
+                    raise ValueError(
+                        "esperado objeto JSON {{chave: voz}}, recebido {}".format(type(loaded).__name__)
+                    )
+                for key, val in loaded.items():
+                    if isinstance(key, str) and isinstance(val, str) and val.strip():
+                        self.voice_map[key] = val.strip()
+            except Exception as err:
+                self.voice_map_error = "voice_map.json invalido ({}): {}".format(map_path, err)
+
+    def reload_voice_map(self, notify=None):
+        """Recarrega o voice_map.json e avisa o jogador se o JSON estiver invalido."""
+        self._load_voice_map()
+        if self.voice_map_error and notify is not None:
+            notify("TTS: " + self.voice_map_error)
+        return self.voice_map
 
     def __getstate__(self):
         default_voice = getattr(self, "_default_voice", DEFAULT_VOICE)
@@ -140,9 +171,10 @@ class TTSState(object):
         self._config = TTSState.config_ref
         self._default_voice = default_voice
         self.auto_forward = d.get("auto_forward", False)
-        self.speed = d.get("speed", DEFAULT_SPEED)
+        self.speed = _clamp_client_speed(d.get("speed", DEFAULT_SPEED))
         self.current_voice = d.get("current_voice", default_voice)
         self.tts_audio_enabled = d.get("tts_audio_enabled", True)
+        self.voice_map_error = None
         self.is_playing = False
         self.auto_advance_flag = False
         self.native_voice_detected = False

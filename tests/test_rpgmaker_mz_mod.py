@@ -181,7 +181,8 @@ class TestRpgMakerMzMod(unittest.TestCase):
         self.assertIn("rxBuffer", content)
         self.assertIn("tts_config.json", content)
         self.assertIn("replace(/[\\r\\n]+/g", content)
-        self.assertIn("3.0", content)
+        self.assertIn("Math.min(2.0", content)
+        self.assertNotIn("3.0", content)
 
     def test_reinstall_preserves_custom_voice_map_and_applies_default_voice(self):
         from install_tts_mod import install_game

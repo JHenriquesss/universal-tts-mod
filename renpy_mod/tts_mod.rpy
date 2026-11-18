@@ -455,7 +455,9 @@ init 999 python:
         _tts_install_display_hook()
         _tts_install_save_compat_hook()
         _tts_install_phone_callback_wrappers()
-        if hasattr(tts_state, "_load_voice_map"):
+        if hasattr(tts_state, "reload_voice_map"):
+            tts_state.reload_voice_map(tts_notify)
+        elif hasattr(tts_state, "_load_voice_map"):
             tts_state._load_voice_map()
         if getattr(tts_state, "tts_audio_enabled", True):
             tts_connect_async(True)

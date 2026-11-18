@@ -22,6 +22,7 @@ class FakeKokoro:
         self.voices = {
             "af_heart": np.full((4,), 1.0, dtype=np.float32),
             "af_bella": np.full((4,), 3.0, dtype=np.float32),
+            "am_onyx": np.full((4,), 5.0, dtype=np.float32),
         }
         self.calls = []
 
@@ -112,12 +113,20 @@ class OnnxPipelineTest(unittest.TestCase):
         self.assertEqual([(c["is_phonemes"], c["lang"]) for c in calls], [(False, "en-us"), (False, "pt-br")])
 
     def test_blended_and_unknown_voices(self):
-        pipe = self._pipeline()
-        list(pipe("Hi.", voice="af_heart,af_bella"))
-        list(pipe("Hi.", voice="nope"))
-        calls = FakeKokoro.instances[0].calls
-        np.testing.assert_allclose(calls[0]["voice"], np.full((4,), 2.0))
-        np.testing.assert_allclose(calls[1]["voice"], np.full((4,), 1.0))
+        with tempfile.TemporaryDirectory() as log_dir, \
+                mock.patch.dict(os.environ, {"TTS_LOG_DIR": log_dir}):
+            pipe = self._pipeline()
+            list(pipe("Hi.", voice="af_heart,af_bella"))
+            list(pipe("Hi.", voice="nope"))
+            list(pipe("Hi.", voice="am_unknown_hero"))
+            calls = FakeKokoro.instances[0].calls
+            np.testing.assert_allclose(calls[0]["voice"], np.full((4,), 2.0))
+            np.testing.assert_allclose(calls[1]["voice"], np.full((4,), 1.0))
+            np.testing.assert_allclose(calls[2]["voice"], np.full((4,), 5.0))
+            with open(os.path.join(log_dir, "tts_server.log"), "r", encoding="utf-8") as handle:
+                log_text = handle.read()
+            self.assertIn("nope", log_text)
+            self.assertIn("am_unknown_hero", log_text)
 
     def test_missing_model_files_fail_with_clear_path(self):
         os.remove(os.path.join(self.tmp.name, tts_engines.ONNX_VOICES_FILE))

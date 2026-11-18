@@ -45,9 +45,9 @@ def speak(state, text, voice, default_voice, substitute, notify):
         state.is_playing = True
         state.speak_start_time = time.time()
         clean_length = len(str(text))
-        current_speed = float(getattr(state, "speed", 1.25) or 1.25)
+        current_speed = min(2.0, max(0.5, float(getattr(state, "speed", 1.25) or 1.25)))
         state.expected_duration = max(
-            3.0, (clean_length / (10.0 * max(0.5, current_speed))) + 4.0
+            3.0, (clean_length / (10.0 * current_speed)) + 4.0
         )
 
         payload = build_payload(text, substitute)

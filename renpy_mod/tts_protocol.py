@@ -64,7 +64,12 @@ def normalize_lang_code(lang):
     return LANG_ALIASES.get(key, key or "a")
 
 
-def parse_speed(raw, low=0.1, high=3.0):
+# Limite nativo real do motor Kokoro ONNX (acima de 2.0x o ONNX faz clamp).
+MIN_SPEED = 0.5
+MAX_SPEED = 2.0
+
+
+def parse_speed(raw, low=MIN_SPEED, high=MAX_SPEED):
     """Velocidade de ``SET_SPEED:<valor>`` ou None quando invalida ou fora da faixa."""
     try:
         parsed = float(raw)
@@ -73,6 +78,17 @@ def parse_speed(raw, low=0.1, high=3.0):
     if math.isnan(parsed) or math.isinf(parsed) or not low <= parsed <= high:
         return None
     return parsed
+
+
+def clamp_speed(raw, default=1.25, low=MIN_SPEED, high=MAX_SPEED):
+    """Normaliza uma velocidade para ``[low, high]`` ou devolve ``default``."""
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    if math.isnan(parsed) or math.isinf(parsed):
+        return float(default)
+    return min(float(high), max(float(low), parsed))
 
 
 def preview_text(text, limit=80):

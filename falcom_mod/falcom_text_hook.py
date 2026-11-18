@@ -82,7 +82,7 @@ class FalcomTextHook(FalcomWin32RuntimeMixin):
         self.speed = 1.25
         self._load_config()
         if speed is not None:
-            self.speed = round(max(0.5, min(3.0, float(speed))), 2)
+            self.speed = round(max(0.5, min(2.0, float(speed))), 2)
         self.target_pid = None
         self.speedhack_enabled = False
         self.tts_enabled = True
@@ -97,7 +97,7 @@ class FalcomTextHook(FalcomWin32RuntimeMixin):
                 with open(config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if "speed" in data:
-                        self.speed = round(max(0.5, min(3.0, float(data["speed"]))), 2)
+                        self.speed = round(max(0.5, min(2.0, float(data["speed"]))), 2)
                     if "port" in data and not self._port_explicit:
                         self.port = int(data["port"])
             except Exception:
@@ -124,7 +124,7 @@ class FalcomTextHook(FalcomWin32RuntimeMixin):
 
     def set_speed(self, speed):
         """Atualiza a velocidade do TTS e envia comando SET_SPEED ao servidor."""
-        self.speed = round(max(0.5, min(3.0, float(speed))), 2)
+        self.speed = round(max(0.5, min(2.0, float(speed))), 2)
         if self.socket and self.is_connected:
             try:
                 self.socket.sendall(f"SET_SPEED:{self.speed}\n".encode("utf-8"))
@@ -135,7 +135,7 @@ class FalcomTextHook(FalcomWin32RuntimeMixin):
         return self.speed
 
     def increase_speed(self, delta=0.1):
-        """Aumenta a velocidade da fala (+0.10x, até 3.00x), como no Ren'Py."""
+        """Aumenta a velocidade da fala (+0.10x, até 2.00x), como no Ren'Py."""
         new_speed = self.set_speed(self.speed + delta)
         self._beep(1200, 35)
         return new_speed

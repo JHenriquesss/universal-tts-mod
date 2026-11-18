@@ -492,6 +492,22 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
             self.assertFalse(ns["_preferences"].self_voicing)
             self.assertIn("'K_v': tts_connect_async", self._source())
 
+    def test_start_callback_notifies_when_voice_map_json_is_corrupted(self):
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                mock.patch("threading.Thread"):
+            with open(os.path.join(tmpdir, "voice_map.json"), "w", encoding="utf-8") as handle:
+                handle.write("{invalid json")
+            ns = self._exec_client_namespace(tmpdir, run_start_callbacks=False)
+            ns["tts_connect_async"] = lambda quiet=False: None
+            notices = []
+            ns["renpy"].notify = notices.append
+            for callback in ns["config"].start_callbacks:
+                callback()
+            self.assertTrue(any("voice_map.json" in msg for msg in notices), f"expected notify, got {notices}")
+
 
 class TestRenpyAutoForwardLifecycle(unittest.TestCase):
     def _source(self):

@@ -92,6 +92,43 @@ class TestTTSClientState(unittest.TestCase):
             state = TTSState(config=FakeConfig(gamedir=gamedir, basedir=None))
 
             self.assertEqual(state.voice_map, {})
+            self.assertIsNone(state.voice_map_error)
+
+    def test_out_of_bounds_saved_speed_is_clamped_on_init_and_unpickle(self):
+        from renpy_mod.tts_client_state import TTSState
+
+        high = TTSState(persistent=FakePersistent(tts_speed=2.8))
+        low = TTSState(persistent=FakePersistent(tts_speed=0.1))
+        self.assertEqual(high.speed, 2.0)
+        self.assertEqual(low.speed, 0.5)
+
+        raw = pickle.dumps(high)
+        restored = TTSState()
+        restored.__setstate__({"speed": 2.9, "auto_forward": False})
+        self.assertEqual(restored.speed, 2.0)
+        self.assertIsNotNone(raw)
+
+    def test_invalid_voice_map_records_diagnostic_error_instead_of_silent_pass(self):
+        from renpy_mod.tts_client_state import TTSState
+
+        with tempfile.TemporaryDirectory() as gamedir:
+            bad_path = os.path.join(gamedir, "voice_map.json")
+            with open(bad_path, "w", encoding="utf-8") as handle:
+                handle.write("{broken json,")
+
+            state = TTSState(config=FakeConfig(gamedir=gamedir, basedir=None))
+            self.assertEqual(state.voice_map, {})
+            self.assertIsNotNone(state.voice_map_error)
+            self.assertIn("voice_map.json", state.voice_map_error)
+
+            with open(bad_path, "w", encoding="utf-8") as handle:
+                json.dump(["not", "a", "dict"], handle)
+
+            notices = []
+            state.reload_voice_map(notify=notices.append)
+            self.assertIsNotNone(state.voice_map_error)
+            self.assertIn("list", state.voice_map_error)
+            self.assertEqual(len(notices), 1)
 
 
 if __name__ == "__main__":

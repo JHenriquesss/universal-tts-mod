@@ -11,7 +11,7 @@ from tts_client_auto import playback_timed_out
 
 
 MIN_SPEED = 0.5
-MAX_SPEED = 3.0
+MAX_SPEED = 2.0
 SPEED_STEP = 0.1
 
 
