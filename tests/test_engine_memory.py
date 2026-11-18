@@ -202,6 +202,48 @@ class EphemeralCacheLifecycleTest(EngineTestBase):
         keys = {e._get_cache_key("Same line.", "af_heart", 1.0) for e in (fp32, int8, espeak)}
         self.assertEqual(len(keys), 3)
 
+    def test_cache_key_clamps_speed_to_onnx_range(self):
+        engine, _ = self._make()
+        self.assertEqual(
+            engine._get_cache_key("Same line.", "af_heart", 2.0),
+            engine._get_cache_key("Same line.", "af_heart", 2.7),
+        )
+        self.assertEqual(
+            engine._get_cache_key("Same line.", "af_heart", 0.5),
+            engine._get_cache_key("Same line.", "af_heart", 0.2),
+        )
+
+    def test_synthesis_exception_without_stop_still_queues_finish_marker(self):
+        engine, _ = self._make()
+        queued = []
+        engine.audio_queue.put = queued.append
+
+        def failing_pipeline(text, voice=None, speed=1.0, split_pattern=None):
+            raise RuntimeError("espeak synthesis failed")
+            yield  # pragma: no cover
+
+        engine.pipeline = failing_pipeline
+        completed = engine.speak("Broken line.", voice="af_heart", speed=1.0)
+
+        self.assertFalse(completed)
+        self.assertIn("FINISH_MARKER", queued)
+
+    def test_synthesis_exception_after_stop_omits_finish_marker(self):
+        engine, _ = self._make()
+        queued = []
+        engine.audio_queue.put = queued.append
+
+        def stop_then_fail(text, voice=None, speed=1.0, split_pattern=None):
+            engine.stop()
+            raise RuntimeError("aborted during stop")
+            yield  # pragma: no cover
+
+        engine.pipeline = stop_then_fail
+        completed = engine.speak("Interrupted line.", voice="af_heart", speed=1.0)
+
+        self.assertFalse(completed)
+        self.assertNotIn("FINISH_MARKER", queued)
+
     def test_stop_during_kokoro_synthesis_omits_finish_marker(self):
         import numpy as np
 
@@ -244,14 +286,24 @@ class EphemeralCacheLifecycleTest(EngineTestBase):
         self.assertIn("Arquivo do modelo Kokoro ausente", engine.load_error)
 
     def test_default_voices_are_valid_kokoro_ids(self):
+        from tts_client_voice import FEMALE_POOL, MALE_POOL
+
         voices = tts_engines.get_available_voices()
         self.assertIn("af_heart", voices)
         self.assertIn("pf_dora", voices)
+        self.assertIn("bf_emma", voices)
+        self.assertIn("bm_george", voices)
+        for pool_voice in MALE_POOL + FEMALE_POOL:
+            self.assertIn(pool_voice, voices)
         self.assertNotIn("pt_br", voices)
         self.assertFalse(
             any("Neural" in str(v) for v in tts_engines.DEFAULT_VOICE_MAP.values()),
             f"Legacy Edge-TTS voices still present: {tts_engines.DEFAULT_VOICE_MAP}",
         )
+
+        engine, _ = self._make()
+        engine.pipeline.kokoro = mock.Mock(voices={"af_heart": 1, "custom_v": 2})
+        self.assertEqual(tts_engines.get_available_voices(engine), ["af_heart", "custom_v"])
 
 
 if __name__ == "__main__":

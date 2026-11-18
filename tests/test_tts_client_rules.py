@@ -204,9 +204,23 @@ class TestTTSClientCommands(unittest.TestCase):
         decrease_speed(state, persistent, messages.append)
         self.assertEqual(state.speed, 0.5)
 
-        state.speed = 3.0
+        state.speed = 1.95
         increase_speed(state, persistent, messages.append)
-        self.assertEqual(state.speed, 3.0)
+        self.assertEqual(state.speed, 2.0)
+        increase_speed(state, persistent, messages.append)
+        self.assertEqual(state.speed, 2.0)
+
+    def test_speak_clamps_expected_duration_to_2x_ceiling(self):
+        from renpy_mod.tts_client_speech import speak
+
+        text = "A" * 100
+        state_2x = FakeState(speed=2.0, sock=FakeSocket())
+        state_over = FakeState(speed=2.9, sock=FakeSocket())
+
+        speak(state_2x, text, "af_heart", "af_heart", lambda s: s, lambda m: None)
+        speak(state_over, text, "af_heart", "af_heart", lambda s: s, lambda m: None)
+
+        self.assertAlmostEqual(state_2x.expected_duration, state_over.expected_duration)
 
     def test_toggle_auto_syncs_the_preferences_and_saves_the_choice(self):
         messages = []

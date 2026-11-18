@@ -69,7 +69,7 @@
                     if (fs.existsSync(p)) {
                         const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
                         if (Number.isInteger(cfg.port) && cfg.port > 0) this.port = cfg.port;
-                        if (typeof cfg.speed === "number" && cfg.speed >= 0.5 && cfg.speed <= 3.0) this.speed = cfg.speed;
+                        if (typeof cfg.speed === "number" && cfg.speed >= 0.5 && cfg.speed <= 2.0) this.speed = cfg.speed;
                         if (typeof cfg.default_voice === "string" && cfg.default_voice.trim()) {
                             this.defaultVoice = cfg.default_voice.trim();
                             this.currentVoice = this.defaultVoice;
@@ -312,7 +312,7 @@
 
                 // + (107 or 187 with shift) : Speed up
                 if (e.keyCode === 107 || (e.keyCode === 187 && e.shiftKey)) {
-                    this.speed = Math.min(3.0, this.speed + 0.1);
+                    this.speed = Math.min(2.0, this.speed + 0.1);
                     console.log(`[TTSModMZ] Velocidade TTS: ${this.speed.toFixed(2)}x`);
                 }
 

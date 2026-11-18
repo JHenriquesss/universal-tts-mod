@@ -94,6 +94,18 @@ class TestTtsProtocol(unittest.TestCase):
             "PLAYBACK_DONE is sent by the backend, never requested by the client",
         )
 
+    def test_parse_speed_enforces_kokoro_onnx_bounds_and_clamp_speed_normalizes(self):
+        self.assertEqual(tts_protocol.MIN_SPEED, 0.5)
+        self.assertEqual(tts_protocol.MAX_SPEED, 2.0)
+        self.assertEqual(tts_protocol.parse_speed("0.5"), 0.5)
+        self.assertEqual(tts_protocol.parse_speed("2.0"), 2.0)
+        self.assertIsNone(tts_protocol.parse_speed("0.4"))
+        self.assertIsNone(tts_protocol.parse_speed("2.1"))
+        self.assertIsNone(tts_protocol.parse_speed("3.0"))
+        self.assertEqual(tts_protocol.clamp_speed(2.8), 2.0)
+        self.assertEqual(tts_protocol.clamp_speed(0.1), 0.5)
+        self.assertEqual(tts_protocol.clamp_speed("invalid", default=1.25), 1.25)
+
     def test_bounded_log_rotates_to_single_backup_when_limit_exceeded(self):
         self.assertTrue(hasattr(tts_protocol, "append_bounded_log"))
         with tempfile.TemporaryDirectory() as tmpdir:

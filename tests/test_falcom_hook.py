@@ -525,9 +525,11 @@ class TestFalcomTextHook(unittest.TestCase):
             self.assertEqual(hook.speed, 1.15)
             mock_socket.sendall.assert_called_with(b"SET_SPEED:1.15\n")
 
-            # Limite máximo (3.0x)
-            hook.set_speed(2.95)
-            self.assertEqual(hook.increase_speed(0.2), 3.0)
+            # Limite máximo (2.0x — limite nativo do Kokoro ONNX)
+            hook.set_speed(1.95)
+            self.assertEqual(hook.increase_speed(0.2), 2.0)
+            hook.set_speed(2.8)
+            self.assertEqual(hook.speed, 2.0)
 
             # Limite mínimo (0.5x)
             hook.set_speed(0.55)
