@@ -8,12 +8,16 @@ echo   Suporta: Ren'Py, Unity (BepInEx), Falcom ED6, RPG Maker MZ
 echo ============================================================
 echo.
 
+:: Dentro de um bloco ( ... ) o cmd expande %errorlevel% antes de rodar o bloco,
+:: entao ali o valor e sempre o de antes. Nos blocos use "if errorlevel 1",
+:: que e avaliado na hora (tests/test_install_tts_mod.py garante isso).
+
 :: 1. Verificar espeak-ng
 espeak-ng --version >nul 2>&1
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo [!] espeak-ng nao encontrado. Tentando instalar via winget...
     winget install --id eSpeak-NG.eSpeak-NG --silent --accept-package-agreements --accept-source-agreements
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo [ERRO] Falha ao instalar espeak-ng automaticamente.
         echo        Baixe e instale manualmente em: https://github.com/espeak-ng/espeak-ng/releases
         pause
@@ -61,7 +65,7 @@ if not exist ".venv\Scripts\activate.bat" (
     echo.
     echo [*] Criando ambiente virtual Python (.venv)...
     "%PYTHON_EXE%" -m venv .venv
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo [ERRO] Falha ao criar ambiente virtual .venv.
         pause
         exit /b 1

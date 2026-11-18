@@ -149,6 +149,7 @@ class TestTTSClientLayout(unittest.TestCase):
     def test_core_modules_stay_within_500_lines(self):
         checked = (
             "install_tts_mod.py",
+            "install_preflight.py",
             os.path.join("renpy_mod", "tts_engines.py"),
             os.path.join("renpy_mod", "tts_onnx_pipeline.py"),
             os.path.join("renpy_mod", "tts_protocol.py"),

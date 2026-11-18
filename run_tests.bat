@@ -7,14 +7,15 @@ echo.
 
 set PYTHONDONTWRITEBYTECODE=1
 python -m unittest discover -s tests
-if %errorlevel% neq 0 (
+set "TEST_STATUS=%errorlevel%"
+if not "%TEST_STATUS%"=="0" (
     echo.
     echo [ERRO] A suite de testes falhou!
-    exit /b %errorlevel%
+    exit /b %TEST_STATUS%
 )
 
 echo.
 echo ==========================================
-echo [SUCESSO] Todos os 136+ testes passaram!
+echo [SUCESSO] Todos os testes passaram!
 echo ==========================================
 pause

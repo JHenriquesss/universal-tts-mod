@@ -764,6 +764,83 @@ class TestTTSServerCommandHelpers(unittest.TestCase):
             items.append(q.get_nowait())
         self.assertEqual(items, [("STOP", None), ("SET_VOICE", "af_bella")])
 
+    def test_import_does_not_redirect_the_process_streams(self):
+        """Importar o modulo nao pode sequestrar o stdout de quem importa.
+
+        Sem isso, todo print feito depois do import (por exemplo, nos testes
+        do Falcom) ia parar em renpy_mod/tts_server.log, e a suite sujava a
+        propria pasta de deploy.
+        """
+        probe = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "streams = (sys.stdout, sys.stderr, sys.stdin); import tts_server; "
+            "print(streams == (sys.stdout, sys.stderr, sys.stdin))"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["TTS_LOG_DIR"] = tmp
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            result = subprocess.run(
+                [sys.executable, "-c", probe, os.path.dirname(SERVER_SCRIPT)],
+                capture_output=True, text=True, env=env, timeout=30,
+            )
+        self.assertEqual(result.stdout.strip(), "True", result.stderr)
+
+    def test_speak_dequeued_before_a_stop_is_discarded(self):
+        """A fala que o worker ja tirou da fila nao toca inteira depois de um STOP."""
+        import queue as py_queue
+        tts_server = self._import_tts_server()
+
+        class RecordingEngine:
+            def __init__(self):
+                self.spoken = []
+
+            def speak(self, text, voice=None, speed=1.0, cancelled=None):
+                self.spoken.append((text, cancelled))
+
+            def stop(self):
+                pass
+
+        engine = RecordingEngine()
+        settings = {"speed": 1.0, "voice": "af_heart"}
+        stale = ("SPEAK", "old line", tts_server._current_generation())
+        tts_server._handle_stop_command(engine, target_queue=py_queue.Queue())
+        tts_server._run_task(engine, stale, settings)
+        self.assertEqual(engine.spoken, [])
+
+        fresh = ("SPEAK", "new line", tts_server._current_generation())
+        tts_server._run_task(engine, fresh, settings)
+        self.assertEqual([text for text, _ in engine.spoken], ["new line"])
+        cancelled = engine.spoken[0][1]
+        self.assertFalse(cancelled())
+        tts_server._handle_stop_command(engine, target_queue=py_queue.Queue())
+        self.assertTrue(cancelled(), "a STOP during synthesis must cancel the line in progress")
+
+    def test_failed_engine_load_is_published_as_error_not_ready(self):
+        """Sem o modelo o backend nao pode anunciar READY: o jogo ficaria mudo."""
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env.update({
+                "TTS_ENGINE": "kokoro",
+                "TTS_LOG_DIR": tmp,
+                "TTS_ONNX_DIR": os.path.join(tmp, "no-model"),
+                "TTS_CACHE_DIR": tmp,
+                "PYTHONDONTWRITEBYTECODE": "1",
+            })
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind((HOST, 0))
+                env["TTS_PORT"] = str(probe.getsockname()[1])
+            result = subprocess.run(
+                [sys.executable, SERVER_SCRIPT, "en", "None", "1.0"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                env=env, timeout=90,
+            )
+            with open(os.path.join(tmp, "tts_ready.txt"), "r", encoding="utf-8") as handle:
+                status = handle.read()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertTrue(status.startswith("ERROR|"), status)
+        self.assertIn("Kokoro", status)
+
 
 if __name__ == "__main__":
     unittest.main()

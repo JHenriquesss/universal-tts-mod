@@ -64,6 +64,23 @@ def normalize_lang_code(lang):
     return LANG_ALIASES.get(key, key or "a")
 
 
+def parse_speed(raw, low=0.1, high=3.0):
+    """Velocidade de ``SET_SPEED:<valor>`` ou None quando invalida ou fora da faixa."""
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(parsed) or math.isinf(parsed) or not low <= parsed <= high:
+        return None
+    return parsed
+
+
+def preview_text(text, limit=80):
+    """Trecho de uma linha para o log, sem quebras."""
+    text = str(text).replace("\n", " ").replace("\r", " ")
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
 def status_has_live_ready(path):
     if not os.path.isfile(path):
         return False

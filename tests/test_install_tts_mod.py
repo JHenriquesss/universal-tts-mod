@@ -274,6 +274,125 @@ class TestInstallTTSMod(unittest.TestCase):
                 self.assertNotIn("PyTorch so-CPU", f.read(), f"Stale PyTorch comment in {rel}")
 
 
+def _batch_lines_reading_errorlevel_inside_a_block(source):
+    """Linhas que leem ``%errorlevel%`` dentro de um bloco ``( ... )``.
+
+    O cmd expande ``%var%`` quando le o bloco inteiro, antes de rodar o
+    primeiro comando dele. Dentro do bloco, ``%errorlevel%`` ainda e o valor
+    de antes do bloco: o instalar.bat acusava erro depois de um winget bem
+    sucedido e deixava passar a falha do ``python -m venv``. ``if errorlevel 1``
+    e avaliado na hora e e a forma correta.
+    """
+    offending = []
+    depth = 0
+    for number, raw in enumerate(source.splitlines(), 1):
+        line = raw.strip()
+        if line.startswith("::") or line.lower().startswith("rem "):
+            continue
+        if depth > 0 and "%errorlevel%" in line.lower():
+            offending.append((number, line))
+        depth += line.count("(") - line.count(")")
+        depth = max(depth, 0)
+    return offending
+
+
+class TestBatchScriptsErrorlevel(unittest.TestCase):
+    def test_batch_scripts_do_not_read_errorlevel_inside_blocks(self):
+        import subprocess
+
+        tracked = subprocess.run(
+            ["git", "ls-files", "*.bat"], cwd=ROOT_DIR, capture_output=True, text=True
+        ).stdout.split()
+        self.assertIn("instalar.bat", tracked)
+        for rel in tracked:
+            with open(os.path.join(ROOT_DIR, rel), "r", encoding="utf-8", errors="replace") as f:
+                offending = _batch_lines_reading_errorlevel_inside_a_block(f.read())
+            self.assertEqual(offending, [], f"{rel} reads %errorlevel% inside a block")
+
+    def test_detector_flags_the_parse_time_expansion_bug(self):
+        bug = 'if %errorlevel% neq 0 (\n    winget install x\n    if %errorlevel% neq 0 (\n        exit /b 1\n    )\n)\n'
+        self.assertEqual([number for number, _ in _batch_lines_reading_errorlevel_inside_a_block(bug)], [3])
+
+
+def _write_pe(path, machine):
+    """Executavel minimo: so o cabecalho que o instalador le para saber a arquitetura."""
+    header = bytearray(0x84)
+    header[0:2] = b"MZ"
+    header[0x3C:0x40] = (0x80).to_bytes(4, "little")
+    header[0x80:0x84] = b"PE\x00\x00"
+    with open(path, "wb") as f:
+        f.write(bytes(header) + machine.to_bytes(2, "little"))
+
+
+class TestUnityInstallPreflight(unittest.TestCase):
+    def _make_unity_game(self, root, machine=0x8664):
+        game_root = os.path.join(root, "SomeUnityGame")
+        os.makedirs(os.path.join(game_root, "SomeUnityGame_Data", "Managed"))
+        _write_pe(os.path.join(game_root, "SomeUnityGame.exe"), machine)
+        _write_pe(os.path.join(game_root, "UnityPlayer.dll"), machine)
+        return game_root
+
+    def _destinations(self, plan, game_root):
+        return {os.path.relpath(entry.destination, game_root) for entry in plan}
+
+    def test_mono_x64_game_gets_bepinex_and_plugin(self):
+        from install_tts_mod import build_install_plan
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_unity_game(tmpdir)
+            destinations = self._destinations(build_install_plan(game_root), game_root)
+
+        self.assertIn("winhttp.dll", destinations)
+        self.assertIn(os.path.join("BepInEx", "plugins", "KokoroTtsPlugin.dll"), destinations)
+
+    def test_il2cpp_game_is_rejected_with_an_explicit_reason(self):
+        from install_tts_mod import UnsupportedUnityGame, build_install_plan
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_unity_game(tmpdir)
+            _write_pe(os.path.join(game_root, "GameAssembly.dll"), 0x8664)
+            with self.assertRaises(UnsupportedUnityGame) as ctx:
+                build_install_plan(game_root)
+        self.assertIn("IL2CPP", str(ctx.exception))
+
+    def test_32_bit_game_is_rejected_because_the_bepinex_pack_is_64_bit(self):
+        from install_tts_mod import UnsupportedUnityGame, build_install_plan
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_unity_game(tmpdir, machine=0x014C)
+            with self.assertRaises(UnsupportedUnityGame) as ctx:
+                build_install_plan(game_root)
+        self.assertIn("32 bits", str(ctx.exception))
+
+    def test_existing_bepinex_5_is_kept_and_only_the_plugin_is_added(self):
+        from install_tts_mod import build_install_plan
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_unity_game(tmpdir)
+            core = os.path.join(game_root, "BepInEx", "core")
+            os.makedirs(core)
+            with open(os.path.join(core, "BepInEx.dll"), "wb") as f:
+                f.write(b"user bepinex")
+            destinations = self._destinations(build_install_plan(game_root), game_root)
+
+        self.assertNotIn("winhttp.dll", destinations)
+        self.assertNotIn(os.path.join("BepInEx", "core", "BepInEx.dll"), destinations)
+        self.assertIn(os.path.join("BepInEx", "plugins", "KokoroTtsPlugin.dll"), destinations)
+
+    def test_bepinex_6_is_rejected(self):
+        from install_tts_mod import UnsupportedUnityGame, build_install_plan
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            game_root = self._make_unity_game(tmpdir)
+            core = os.path.join(game_root, "BepInEx", "core")
+            os.makedirs(core)
+            with open(os.path.join(core, "BepInEx.Core.dll"), "wb") as f:
+                f.write(b"bepinex 6")
+            with self.assertRaises(UnsupportedUnityGame) as ctx:
+                build_install_plan(game_root)
+        self.assertIn("BepInEx 6", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
 

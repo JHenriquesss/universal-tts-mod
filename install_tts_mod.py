@@ -18,11 +18,15 @@ TEXTRACTOR_RUNTIME_DIR = os.path.join(
 )
 BEPINEX_PACK_DIR = os.path.join(UNITY_MOD_DIR, "bepinex_pack")
 
-# A engine Falcom depende do runtime x86 do Textractor, que e um binario externo
-# grande e de terceiros: nao e versionado neste repositorio. O preflight abaixo
-# evita uma instalacao silenciosamente invalida (sem TextractorCLI.exe a ponte
-# de dialogo nunca funciona).
-TEXTRACTOR_REQUIRED_FILES = ("TextractorCLI.exe",)
+# Checagens previas (runtime do Textractor, jogo Unity compativel) ficam em
+# install_preflight.py; os nomes sao reexportados aqui para quem ja os importa.
+from install_preflight import (  # noqa: E402,F401
+    TEXTRACTOR_REQUIRED_FILES,
+    TextractorRuntimeMissing,
+    UnsupportedUnityGame,
+    validate_textractor_runtime,
+    validate_unity_target,
+)
 
 # Arquivos de runtime do backend: servidor, motor de sintese, limpeza de texto e
 # o protocolo compartilhado. O tts_server.py importa tts_protocol, entao os dois
@@ -128,42 +132,6 @@ def find_game_root(game_folder):
     return root
 
 
-class TextractorRuntimeMissing(ValueError):
-    """Runtime externo do Textractor ausente ou incompleto (engine Falcom)."""
-
-
-def validate_textractor_runtime(runtime_dir):
-    """
-    Valida o runtime do Textractor exigido pela engine Falcom.
-
-    Levanta TextractorRuntimeMissing com orientacao acionavel quando o runtime
-    nao esta disponivel, em vez de deixar a instalacao "concluir" com sucesso e
-    produzir um jogo sem a ponte de dialogo.
-    """
-    if not os.path.isdir(runtime_dir):
-        raise TextractorRuntimeMissing(
-            "Runtime do Textractor ausente em: {}. A engine Falcom exige o runtime "
-            "x86 do Textractor 5.2.0, que e uma dependencia externa e nao acompanha "
-            "este repositorio. Coloque o runtime nessa pasta (ou informe "
-            "--textractor-runtime) e execute o instalador novamente.".format(runtime_dir)
-        )
-
-    missing = [
-        name
-        for name in TEXTRACTOR_REQUIRED_FILES
-        if not os.path.isfile(os.path.join(runtime_dir, name))
-    ]
-    if missing:
-        raise TextractorRuntimeMissing(
-            "Runtime do Textractor incompleto em: {}. Arquivo(s) obrigatorio(s) "
-            "ausente(s): {}. Reinstale o runtime x86 do Textractor 5.2.0 nessa "
-            "pasta (ou informe --textractor-runtime) e execute o instalador "
-            "novamente.".format(runtime_dir, ", ".join(missing))
-        )
-
-    return runtime_dir
-
-
 def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, choice_hints_file=None, textractor_runtime_dir=None):
     engine, game_root = detect_game_engine(game_folder)
     entries = []
@@ -193,6 +161,11 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
             entries.append(CopyEntry(voice_map, os.path.join(game_root, "voice_map.json")))
 
     elif engine == "unity":
+        validate_unity_target(game_root)
+        # Um BepInEx 5 ja instalado fica como esta: sobrescrever o core e o
+        # doorstop desfaria a configuracao e as versoes que os outros mods usam.
+        bepinex_installed = os.path.isfile(os.path.join(game_root, "BepInEx", "core", "BepInEx.dll"))
+
         # 1. Servidor backend na raiz do jogo
         for filename in BACKEND_RUNTIME_FILES + ("run_backend.bat",):
             source = os.path.join(RENPY_MOD_DIR, filename)
@@ -200,7 +173,7 @@ def build_install_plan(game_folder, with_choice_overlay=False, voice_map=None, c
                 entries.append(CopyEntry(source, os.path.join(game_root, filename)))
 
         # 2. Injetar BepInEx completo se ainda nao instalado no jogo
-        if os.path.exists(BEPINEX_PACK_DIR):
+        if os.path.exists(BEPINEX_PACK_DIR) and not bepinex_installed:
             for root_dir, dirnames, filenames in os.walk(BEPINEX_PACK_DIR):
                 for f in filenames:
                     src_path = os.path.join(root_dir, f)
@@ -446,7 +419,7 @@ def install_game(
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Instalador Universal do Mod TTS (Ren'Py + Unity).")
+    parser = argparse.ArgumentParser(description="Instalador Universal do Mod TTS (Ren'Py, Unity, RPG Maker MZ e Falcom).")
     parser.add_argument("--game-folder", required=True, help="Caminho para a pasta do jogo.")
     parser.add_argument("--with-choice-overlay", action="store_true", help="Instalação de overlays de escolha (apenas Ren'Py).")
     parser.add_argument("--choice-hints-file", help="Caminho para arquivo customizado de hints geradas (habilita overlay de escolhas).")
