@@ -12,7 +12,7 @@ import re
 
 PLAYER_NAME_KEYS = (
     "player_name", "playername", "povname", "pc_name", "mc_name", "mcname", "mcname2", "mc", "mcN", "mcn",
-    "hero_name", "protagonist_name", "user_name", "name", "firstname",
+    "hero_name", "protagonist_name", "user_name", "name", "pname", "firstname",
     "first_name", "galleryMC", "gallerymc",
 )
 

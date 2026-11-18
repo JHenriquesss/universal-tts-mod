@@ -2,7 +2,7 @@
 
 ## Trunk
 - Command: `python -m unittest discover -s tests`
-- Latest evidence: `Ran 458 tests in 12.5s OK` (2026-11-17, after the P1 fixes of the 2026-11 review: backend publishes `ERROR|` when the model does not load, STOP generation counter, connect off the game thread, `instalar.bat` errorlevel guard, Unity install preflight, and importing `tts_server` no longer redirects stdout; includes the 2026-11-14 `playername`/`mc`/`mcname2` voice-key tests).
+- Latest evidence: `Ran 465 tests in 13.0s OK` (2026-11-18, after fixing HIBAH S2 deployment: added `pname` protagonist alias harvesting, `K_v` underlay binding and clearing stale `self_voicing` from persistent on start/load, and `hibah_s2` voice map + tests).
 - Batch script: `run_tests.bat` wraps cleaner + integration tests but trunk evidence uses direct unittest discovery.
 - The recorded count is asserted by `tests/test_wiki_state.py` against the real discovery count, so this page cannot silently go stale.
 - The recorded count is the count of the **committed** trunk: copy it from the output of
@@ -40,7 +40,7 @@
 | Falcom launcher | `tests/test_falcom_launcher.py` | Supervisor owns backend/game/bridge processes and only stops what it created. |
 | Falcom textractor | `tests/test_falcom_textractor.py` | Executable signature scan and Textractor configuration writing. |
 | RPG Maker MZ mod | `tests/test_rpgmaker_mz_mod.py` | Plugin JS contract, plugin registration, voice map wiring. |
-| Voice maps | `tests/test_*_voice_map.py` (12 files) | Per-game speaker-to-voice maps: after_the_fall, baking_with_chocolate, being_super, cockham, femboy_sorority, grandmas_house, milf_obsession, much_bigger_than_my_boyfriend, shadows_of_trust, small_coffee, the_home_of_pleasure, university_of_problems. |
+| Voice maps | `tests/test_*_voice_map.py` (13 files) | Per-game speaker-to-voice maps: after_the_fall, baking_with_chocolate, being_super, cockham, femboy_sorority, grandmas_house, hibah_s2, milf_obsession, much_bigger_than_my_boyfriend, shadows_of_trust, small_coffee, the_home_of_pleasure, university_of_problems. |
 | Backend smoke check | `tests/test_smoke_check.py` | Mock backend process starts, accepts command, logs context/events, exits via `QUIT`; timeout kills child. |
 | Release manifest/archive | `tests/test_release_manifest.py` | Manifest sources/destinations match installer; forbidden files excluded; archive zip names exactly match manifest; missing output parent rejected; package/version metadata; default versioned archive path. |
 | README/wiki docs | `tests/test_readme_deploy_docs.py`, `tests/test_wiki_state.py` | Deploy checklist, voice/protocol docs, extractor CLI examples, TTS-only workflow, release hygiene/archive docs, final release checklist, wiki open-thread state, and code-derived guards for the supported engines and the protocol commands. |

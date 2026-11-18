@@ -185,6 +185,22 @@ class TestTTSClientVoice(unittest.TestCase):
             "am_onyx",
         )
 
+    def test_pname_persistent_variable_resolves_to_mc_voice(self):
+        from renpy_mod.tts_client_voice import (
+            PLAYER_NAME_KEYS,
+            collect_context_names,
+            resolve_voice,
+        )
+
+        persistent = FakeStore(pname="Dezno")
+        names = collect_context_names(PLAYER_NAME_KEYS, (persistent,))
+
+        self.assertIn("dezno", names)
+        self.assertEqual(
+            resolve_voice("Dezno", {"mc": "am_onyx"}, player_names=names),
+            "am_onyx",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

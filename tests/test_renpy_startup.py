@@ -478,6 +478,20 @@ class TestRenpyBackendLifecycle(unittest.TestCase):
             self.assertNotIn(("sendall", b"QUIT\n"), events)
             self.assertIn("sock_close", events)
 
+    def test_start_callback_clears_stale_self_voicing_from_persistent(self):
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+                mock.patch("threading.Thread"):
+            ns = self._exec_client_namespace(tmpdir, run_start_callbacks=False)
+            ns["_preferences"].self_voicing = True
+            ns["tts_connect_async"] = lambda quiet=False: None
+            for callback in ns["config"].start_callbacks:
+                callback()
+            self.assertFalse(ns["_preferences"].self_voicing)
+            self.assertIn("'K_v': tts_connect_async", self._source())
+
 
 class TestRenpyAutoForwardLifecycle(unittest.TestCase):
     def _source(self):

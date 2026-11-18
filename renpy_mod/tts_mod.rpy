@@ -416,7 +416,7 @@ init 999 python:
     config.all_character_callbacks.append(_tts_callback)
 
     km_dict = {
-        'v': tts_connect_async, 'V': tts_connect_async, 'shift_K_v': tts_connect_async,
+        'v': tts_connect_async, 'V': tts_connect_async, 'shift_K_v': tts_connect_async, 'K_v': tts_connect_async,
         'a': tts_toggle_auto, 'A': tts_toggle_auto, 'shift_K_a': tts_toggle_auto, 'K_a': tts_toggle_auto,
         't': tts_toggle_audio, 'T': tts_toggle_audio, 'shift_K_t': tts_toggle_audio, 'K_t': tts_toggle_audio,
         'm': tts_toggle_audio, 'M': tts_toggle_audio,
@@ -445,6 +445,13 @@ init 999 python:
         install_display_hook(rtts, lambda: getattr(tts_state, "is_playing", False))
 
     def tts_start_callback():
+        # Evita que self_voicing residual no persistent reduza o volume do jogo
+        # ou dispare o narrador nativo/trave o auto-avanco por foco de janela.
+        try:
+            if getattr(_preferences, "self_voicing", False):
+                _preferences.self_voicing = False
+        except Exception:
+            pass
         _tts_install_display_hook()
         _tts_install_save_compat_hook()
         _tts_install_phone_callback_wrappers()
